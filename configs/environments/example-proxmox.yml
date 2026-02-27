@@ -1,0 +1,65 @@
+# OverTime Provisioning Spec — Proxmox Example
+#
+# This file demonstrates all configuration sections for a Proxmox deployment.
+# Copy this file, fill in your values, and run:
+#   overtime validate <your-spec.yml>
+#   overtime create   <your-spec.yml>
+#   overtime configure <your-spec.yml>
+#
+# Secrets — two options (pick one):
+#   1. Environment variables (recommended): export PM_PASSWORD=... (or PM_API_TOKEN=...) before running overtime
+#   2. 1Password: use op:// paths (e.g. ${secret:op://vault/item/field})
+#   Alternatively, copy .env.example → .env and fill in values (read when secrets.backend = dotenv)
+
+provider: proxmox
+
+secrets:
+  backend: envvars       # reads from environment variables; also supports "dotenv"
+
+proxmox:
+  pm_api_url: "https://192.168.0.100:8006"     # Proxmox VE API URL (must be HTTPS)
+  # --- Authentication: choose ONE of password or API token ---
+  # Password auth:
+  #   pm_user: "root@pam"
+  #   pm_password: "${secret:pm_password}"         # export PM_PASSWORD=...
+  # API token auth (recommended):
+  pm_user: "overtime@pve!overtime-token"          # token ID: user@realm!token-name
+  pm_api_token: "${secret:pm_api_token}"          # export PM_API_TOKEN=...
+  pm_tls_insecure: true                          # WARNING: disables TLS cert verification; set false in production
+  node_name: "pve"                               # Proxmox compute node
+  storage_pool: "local-lvm"                      # storage pool for VM disks
+  network_bridge: "vmbr1"                        # network bridge name
+  linux_template_id: "123"                       # numeric VM ID of Linux template
+  windows_template_id: "456"                     # numeric VM ID of Windows template
+  subnet_cidr: "192.168.0.0/24"               # subnet CIDR for VM addressing
+  vm_gateway: "192.168.0.1"                    # default gateway IP
+  # vm_id_start: 9000                            # starting VM ID; change to avoid collisions in multi-node clusters
+  # default_memory: 4096                          # default RAM in MB for all VMs; per-VM overrides in Terraform take precedence
+
+environment:
+  environment_name_prefix: "lab"                 # prefix for VM names (1-10 chars)
+  scenario: "ad-lab-m"                           # run 'overtime scenarios -p proxmox' for options
+  environment_fqdn: "lab.local"                  # FQDN for the environment
+
+ansible:
+  ansible_user: "ot-bootstrap"                   # cloud-init also creates this user on Linux; Ansible connects as it; Cloudbase-Init currently doesn't support passing in a username
+  ansible_password: "${secret:ansible_password}" # export ANSIBLE_PASSWORD=...
+  ssh_pub_key: ""                                # SSH public key for Linux VMs (leave blank if not using key auth)
+  # ssh_key: "~/.ssh/lab-key"                    # path to SSH private key (optional)
+
+# Optional: linux utility server settings
+jumphost:
+  # ip: "192.168.0.10"   # explicit IP; use if connecting with public IP or if exposing with NAT
+
+# Optional: explicit playbook sequence for `overtime configure`
+configure:
+  playbooks:
+    - playbook: "primary_ad_setup.yml"
+      targets: "ad"
+      description: "Create AD forest"
+    - playbook: "secondary_ad_setup.yml"
+      targets: "ad"
+      description: "Promote secondary DC"
+    - playbook: "join_member_server.yml"
+      targets: "general:wutil"
+      description: "Join member servers to domain"

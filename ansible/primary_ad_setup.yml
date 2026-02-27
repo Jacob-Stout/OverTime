@@ -1,0 +1,81 @@
+---
+- name: Setup First Windows Domain Controller (New Forest/Domain)
+  hosts: "*-ad-1a"
+  gather_facts: false
+  tasks:
+    - name: Gather facts
+      setup:
+
+    - name: Set Local Administrator
+      win_user:
+        name: Administrator
+        password: "{{ ansible_password }}"
+        state: present
+
+    - name: Disable Defrag
+      win_scheduled_task:
+        path: "\\Microsoft\\Windows\\Defrag"
+        name: "ScheduledDefrag"
+        enabled: false
+
+    - name: Stop Windows Update, Just in Case
+      win_service:
+        name: wuauserv
+        state: stopped
+
+    - name: Disable Windows Firewall With Scheduled Task
+      win_shell: |
+        $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument 'Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False'
+        $trigger = New-ScheduledTaskTrigger -AtStartup
+        $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -RunLevel Highest
+        Register-ScheduledTask -TaskName "DisableFirewallOnStartup" -Action $action -Trigger $trigger -Principal $principal -Force
+      args:
+        executable: powershell.exe
+
+    - name: Install AD DS and Create a New Forest
+      microsoft.ad.domain:
+        dns_domain_name: "{{ ansible_env_fqdn }}"
+        safe_mode_password: "{{ ansible_password }}"
+        domain_netbios_name: "{{ ansible_domain_prefix | upper }}"
+        forest_mode: "WinThreshold"
+        domain_mode: "WinThreshold"
+        create_dns_delegation: false
+        install_dns: true
+        database_path: "C:\\Windows\\NTDS"
+        log_path: "C:\\Windows\\NTDS"
+        sysvol_path: "C:\\Windows\\SYSVOL"
+        reboot: true        
+      register: dc_promoted
+
+    - name: Remove the scheduled task to disable firewall
+      win_scheduled_task:
+        name: "DisableFirewallOnStartup"
+        state: absent
+        
+    - name: Set DNS servers (with secondary DC)
+      win_dns_client:
+        adapter_names:
+          - "*"
+        ipv4_addresses:
+          - 127.0.0.1
+          - "{{ hostvars[groups['ad'] | select('search', 'ad-2a$') | list | first | default('')]['ansible_host'] | default('') }}"
+      when: groups['ad'] | select('search', 'ad-2a$') | list | length > 0
+
+    - name: Set DNS servers (single DC)
+      win_dns_client:
+        adapter_names:
+          - "*"
+        ipv4_addresses:
+          - 127.0.0.1
+      when: groups['ad'] | select('search', 'ad-2a$') | list | length == 0
+
+    - name: Add User to Domain Administrator
+      microsoft.ad.group:
+        name: Domain Admins
+        members:
+          add:
+            - "{{ ansible_user }}"
+      retries: 3
+      delay: 10
+      until: result is succeeded
+      register: result            

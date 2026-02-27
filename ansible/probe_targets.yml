@@ -1,0 +1,28 @@
+---
+# Probe all environment VMs from the linux utility server before running configuration playbooks.
+# Uses Ansible's wait_for module — no custom script, no extra dependencies.
+#
+# On timeout the play fails with a per-host error.  The configure command
+# reports the failure and stops.
+
+- name: Wait for target VMs to become reachable
+  hosts: "all:!lutil"
+  gather_facts: no
+  tasks:
+    - name: Wait for SSH (Linux)
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: 22
+        timeout: 600
+        state: started
+      delegate_to: localhost
+      when: ansible_connection | default("ssh") == "ssh"
+
+    - name: Wait for WinRM (Windows)
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: 5985
+        timeout: 600
+        state: started
+      delegate_to: localhost
+      when: ansible_connection | default("ssh") == "winrm"

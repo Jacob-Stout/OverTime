@@ -1,0 +1,7 @@
+---
+- name: Shutdown Linux Servers
+  hosts: all:!lutil
+  become: yes
+  tasks:
+    - name: Shutdown the server
+      command: /sbin/shutdown -h now

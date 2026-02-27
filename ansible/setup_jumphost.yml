@@ -1,0 +1,46 @@
+---
+# Configure the linux utility server as an Ansible control node.
+#
+# Prerequisites:  Ansible must already be installed.  The remote runner
+# bootstraps Ansible via apt before this playbook runs.
+#
+# Idempotent: safe to re-run.
+#
+
+- name: Configure linux utility server as Ansible control node
+  hosts: localhost
+  connection: local
+  gather_facts: yes
+
+  tasks:
+    # ── Sanity check ────────────────────────────────────────────────────
+    - name: Verify Ansible is installed
+      ansible.builtin.command: ansible --version
+      changed_when: false
+      register: ansible_check
+      failed_when: ansible_check.rc != 0
+
+    # ── SSH client ──────────────────────────────────────────────────────
+    - name: Ensure openssh-client is installed
+      ansible.builtin.package:
+        name: openssh-client
+        state: present
+      become: yes
+
+    # ── SSH agent (persistent across login shells) ─────────────────────
+    - name: Add SSH agent export to .bashrc
+      ansible.builtin.lineinfile:
+        path: "{{ ansible_env.HOME }}/.bashrc"
+        line: 'eval "$(ssh-agent -s)"'
+        state: present
+
+    # ── Ansible configuration ───────────────────────────────────────────
+    - name: Write ansible.cfg — disable host-key checking for managed VMs
+      ansible.builtin.copy:
+        dest: "{{ ansible_env.HOME }}/.ansible.cfg"
+        content: |
+          [defaults]
+          remote_tmp = /tmp/.ansible/tmp
+          [ssh_connection]
+          ssh_args = -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
+        mode: "0600"

@@ -1,0 +1,20 @@
+---
+- name: Install Windows Updates on All Windows Servers
+  hosts: all:!lutil
+  gather_facts: false
+
+  tasks:
+    - name: Gather facts
+      setup:
+
+    - name: Install all updates
+      ansible.windows.win_updates:
+        category_names: "*"
+        reboot: true
+        reboot_timeout: 3600
+      register: update_result
+
+    - name: Refresh Windows Update GUI
+      ansible.windows.win_command:
+        cmd: usoclient startinteractivescan
+      when: update_result.changed

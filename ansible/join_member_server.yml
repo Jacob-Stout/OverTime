@@ -1,0 +1,40 @@
+---
+- name: Configure DNS and join servers to the domain
+  hosts: wutil:general
+  gather_facts: false
+
+  tasks:
+    - name: Gather facts
+      setup:
+
+    - name: Set DNS servers to domain controllers
+      win_dns_client:
+        adapter_names:
+          - "*"
+        ipv4_addresses: "{{ groups['ad'] | map('extract', hostvars, 'ansible_host') | list }}"
+
+    - name: Disable Windows Firewall With Scheduled Task
+      win_shell: |
+        $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument 'Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False'
+        $trigger = New-ScheduledTaskTrigger -AtStartup
+        $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -RunLevel Highest
+        Register-ScheduledTask -TaskName "DisableFirewallOnStartup" -Action $action -Trigger $trigger -Principal $principal -Force
+      args:
+        executable: powershell.exe
+
+    - name: Join server to the domain
+      microsoft.ad.membership:
+        dns_domain_name: "{{ ansible_env_fqdn }}"
+        domain_admin_user: "{{ ansible_domain_prefix }}\\{{ ansible_user }}"
+        domain_admin_password: "{{ ansible_password }}"
+        state: domain
+      register: domain_join
+
+    - name: Reboot if domain join required
+      win_reboot:
+      when: domain_join.changed
+
+    - name: Remove the scheduled task to disable firewall
+      win_scheduled_task:
+        name: "DisableFirewallOnStartup"
+        state: absent
