@@ -7,7 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from overtime.terraform.azure_orchestrator import AzureOrchestrator
-from overtime.config.schema import AzureConfig, ProvisioningSpec
+from overtime.config.schema import AzureConfig, ProvisioningSpec, VmSpec
 from overtime.utils.exceptions import TerraformError
 
 
@@ -15,19 +15,17 @@ from overtime.utils.exceptions import TerraformError
 # Shared fixtures
 # ---------------------------------------------------------------------------
 
-# VM definition sets mirroring the Azure main.tf topologies.
-# vm_size is omitted — var.default_vm_size serves as fallback in Terraform.
-
+# VM definition sets in config format (name, os, role).
 M_VM_DEFS = [
-    {"name_suffix": "ad-1a",    "role": "ad",      "os_type": "windows", "ip_offset": 10, "disk_gb": 40},
-    {"name_suffix": "ad-2a",    "role": "ad",      "os_type": "windows", "ip_offset": 11, "disk_gb": 40},
-    {"name_suffix": "wutil-1a", "role": "wutil",   "os_type": "windows", "ip_offset": 12, "disk_gb": 40},
-    {"name_suffix": "gen-1a",   "role": "general", "os_type": "windows", "ip_offset": 13, "disk_gb": 40},
-    {"name_suffix": "gen-1b",   "role": "general", "os_type": "windows", "ip_offset": 14, "disk_gb": 40},
+    {"name": "ad-1a",    "role": "ad",      "os": "windows", "ip_offset": 10, "disk": 40},
+    {"name": "ad-2a",    "role": "ad",      "os": "windows", "ip_offset": 11, "disk": 40},
+    {"name": "wutil-1a", "role": "wutil",   "os": "windows", "ip_offset": 12, "disk": 40},
+    {"name": "gen-1a",   "role": "general", "os": "windows", "ip_offset": 13, "disk": 40},
+    {"name": "gen-1b",   "role": "general", "os": "windows", "ip_offset": 14, "disk": 40},
 ]
 
 CTRL_VM_DEFS = [
-    {"name_suffix": "lutil-1a", "role": "lutil", "os_type": "linux", "ip_offset": 10, "disk_gb": 30},
+    {"name": "lutil-1a", "role": "lutil", "os": "linux", "ip_offset": 10, "disk": 30},
 ]
 
 
@@ -48,15 +46,16 @@ def azure_config() -> dict:
             "allowed_source_prefix": "*",
         },
         "environment": {
-            "scenario":                "ad-lab-m",
             "environment_name_prefix": "lab",
             "environment_fqdn":        "lab.local",
+            "workspace":               "lab-ad-lab-m",
         },
         "ansible": {
             "ansible_user":     "overtimeadmin",
             "ansible_password": "ansible_secret",
             "ssh_pub_key":      "ssh-ed25519 AAAA test@host",
         },
+        "vms": M_VM_DEFS,
     }
 
 
@@ -70,41 +69,9 @@ class TestAzureOrchestrator:
 
     @pytest.fixture()
     def orchestrator(self, tmp_path) -> AzureOrchestrator:
-        """Orchestrator pointed at tmp; main.tf fixture has M and jumphost sizes."""
-        # Minimal HCL that python-hcl2 can parse — only the vm_definitions local.
-        # vm_size is omitted (var.default_vm_size serves as fallback in Terraform).
-        (tmp_path / "main.tf").write_text("""\
-locals {
-  vm_definitions = {
-    "ad-lab-m" = [
-      { name_suffix = "ad-1a",    role = "ad",      os_type = "windows", ip_offset = 10, disk_gb = 40 },
-      { name_suffix = "ad-2a",    role = "ad",      os_type = "windows", ip_offset = 11, disk_gb = 40 },
-      { name_suffix = "wutil-1a", role = "wutil",   os_type = "windows", ip_offset = 12, disk_gb = 40 },
-      { name_suffix = "gen-1a",   role = "general", os_type = "windows", ip_offset = 13, disk_gb = 40 },
-      { name_suffix = "gen-1b",   role = "general", os_type = "windows", ip_offset = 14, disk_gb = 40 },
-    ]
-
-    "jumphost" = [
-      { name_suffix = "lutil-1a", role = "lutil", os_type = "linux", ip_offset = 10, disk_gb = 30 },
-    ]
-  }
-}
-""")
+        """Orchestrator pointed at tmp; no HCL needed."""
+        (tmp_path / "main.tf").write_text("")
         return AzureOrchestrator(terraform_dir=tmp_path)
-
-    # -- VM definition loading ----------------------------------------------
-
-    def test_load_vm_definitions_parses_m_size(self, orchestrator):
-        """_load_vm_definitions('ad-lab-m') returns 5 VM dicts from the fixture."""
-        vms = orchestrator._load_vm_definitions("ad-lab-m")
-        assert len(vms) == 5
-        suffixes = {vm["name_suffix"] for vm in vms}
-        assert suffixes == {"ad-1a", "ad-2a", "wutil-1a", "gen-1a", "gen-1b"}
-
-    def test_load_vm_definitions_raises_for_missing_size(self, orchestrator):
-        """Requesting a size not in the fixture raises TerraformError."""
-        with pytest.raises(TerraformError, match="No VM definitions"):
-            orchestrator._load_vm_definitions("ad-lab-xs")
 
     # -- Tfvars writing ----------------------------------------------------
 
@@ -117,9 +84,15 @@ locals {
         assert tfvars["subscription_id"] == "12345678-1234-1234-1234-123456789abc"
         assert tfvars["resource_group_name"] == "ot-lab-M"
         assert tfvars["environment_name_prefix"] == "lab"
+        assert tfvars["workspace"] == "lab-ad-lab-m"
         assert "location" not in tfvars
-        assert tfvars["scenario"] == "ad-lab-m"
-        assert "init_configs" not in tfvars
+        assert "vm_list" in tfvars
+        assert len(tfvars["vm_list"]) == 5
+        # Check Terraform-format keys in vm_list
+        vm0 = tfvars["vm_list"][0]
+        assert vm0["name_suffix"] == "ad-1a"
+        assert vm0["os_type"] == "windows"
+        assert vm0["disk_gb"] == 40
 
     def test_write_tfvars_excludes_admin_password(
         self, orchestrator, azure_config, tmp_path
@@ -163,14 +136,11 @@ locals {
         assert orchestrator._tf_vars["admin_password"] == "ansible_secret"
 
     # -- Lifecycle methods --------------------------------------------------
-    # _run, init, ensure_workspace, read_outputs are tested in
-    # test_base_orchestrator.py (inherited from BaseOrchestrator).
 
     def test_apply_passes_auto_approve(self, orchestrator, azure_config):
         """apply(auto_approve=True) appends -auto-approve to the terraform call."""
         with (
             patch.object(orchestrator, "_set_env"),
-            patch.object(orchestrator, "_load_vm_definitions", return_value=M_VM_DEFS),
             patch.object(orchestrator, "_write_tfvars"),
             patch.object(orchestrator, "ensure_workspace"),
             patch.object(orchestrator, "_run") as mock_run,
@@ -185,7 +155,6 @@ locals {
         """apply() calls _disable_windows_firewall for Windows VMs after terraform apply."""
         with (
             patch.object(orchestrator, "_set_env"),
-            patch.object(orchestrator, "_load_vm_definitions", return_value=M_VM_DEFS),
             patch.object(orchestrator, "_write_tfvars"),
             patch.object(orchestrator, "ensure_workspace"),
             patch.object(orchestrator, "_run"),
@@ -197,16 +166,15 @@ locals {
         mock_fw.assert_called_once()
         windows_vms, rg, prefix = mock_fw.call_args[0]
         assert len(windows_vms) == 5
-        assert all(vm["os_type"] == "windows" for vm in windows_vms)
+        assert all(vm["os"] == "windows" for vm in windows_vms)
         assert rg == "ot-lab-M"
         assert prefix == "lab"
 
     def test_apply_skips_firewall_for_linux_only(self, orchestrator, azure_config):
         """apply() does not call _disable_windows_firewall when all VMs are Linux."""
-        azure_config["environment"]["scenario"] = "jumphost"
+        azure_config["vms"] = CTRL_VM_DEFS
         with (
             patch.object(orchestrator, "_set_env"),
-            patch.object(orchestrator, "_load_vm_definitions", return_value=CTRL_VM_DEFS),
             patch.object(orchestrator, "_write_tfvars"),
             patch.object(orchestrator, "ensure_workspace"),
             patch.object(orchestrator, "_run"),
@@ -223,8 +191,8 @@ locals {
         """_disable_windows_firewall calls az vm run-command for each Windows VM."""
         mock_subproc.return_value = MagicMock(returncode=0)
         vms = [
-            {"name_suffix": "ad-1a", "os_type": "windows"},
-            {"name_suffix": "wutil-1a", "os_type": "windows"},
+            {"name": "ad-1a", "os": "windows"},
+            {"name": "wutil-1a", "os": "windows"},
         ]
         orchestrator._disable_windows_firewall(vms, "my-rg", "lab")
 
@@ -240,23 +208,14 @@ locals {
         """destroy() sets env, selects workspace, and runs ``terraform destroy``."""
         with (
             patch.object(orchestrator, "_set_env"),
+            patch.object(orchestrator, "_write_tfvars"),
             patch.object(orchestrator, "ensure_workspace") as mock_ws,
             patch.object(orchestrator, "_run") as mock_run,
         ):
             orchestrator.destroy(azure_config, auto_approve=True)
 
-        mock_ws.assert_called_once_with("lab", "ad-lab-m")
+        mock_ws.assert_called_once_with("lab-ad-lab-m")
         mock_run.assert_called_once_with(["destroy", "-input=false", "-auto-approve"])
-
-    def test_get_vm_definitions_delegates_to_loader(self, orchestrator, azure_config):
-        """get_vm_definitions() is a thin wrapper over _load_vm_definitions."""
-        with patch.object(
-            orchestrator, "_load_vm_definitions", return_value=CTRL_VM_DEFS
-        ) as mock_load:
-            result = orchestrator.get_vm_definitions(azure_config)
-
-        mock_load.assert_called_once_with("ad-lab-m")
-        assert result is CTRL_VM_DEFS
 
 
 # ---------------------------------------------------------------------------
@@ -285,8 +244,8 @@ class TestAzureSchema:
             "azure": self._valid_azure_data(),
             "environment": {
                 "environment_name_prefix": "lab",
-                "scenario": "ad-lab-m",
                 "environment_fqdn": "lab.local",
+                "workspace": "lab-ad-lab-m",
             },
             "ansible": {
                 "ansible_user": "overtimeadmin",
@@ -294,6 +253,9 @@ class TestAzureSchema:
                 "ssh_pub_key": "ssh-ed25519 AAAA test@host",
                 "ssh_key": "~/.ssh/id_ed25519",
             },
+            "vms": [
+                {"name": "ad-1a", "os": "windows", "role": "ad", "ip_offset": 10},
+            ],
         }
 
     def test_valid_azure_config_passes(self):

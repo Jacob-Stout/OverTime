@@ -4,6 +4,47 @@ from typing import Literal, Optional
 from pydantic import BaseModel, Field, field_validator, model_validator, SecretStr
 
 
+class VmSpec(BaseModel):
+    """A single VM definition in the provisioning spec."""
+
+    name: str = Field(
+        ...,
+        min_length=1,
+        description="Name suffix — the VM will be named {environment_name_prefix}-{name}",
+        examples=["ad-1a", "lutil-1a", "k8s-1a"],
+    )
+    os: Literal["windows", "linux"] = Field(
+        ...,
+        description="Operating system type",
+    )
+    role: str = Field(
+        ...,
+        min_length=1,
+        description="VM role used for Ansible inventory grouping "
+                    "(e.g. ad, wutil, general, ctrl, work, lutil)",
+    )
+    cpu: int = Field(
+        default=2,
+        ge=1,
+        description="Number of CPU cores",
+    )
+    memory: Optional[int] = Field(
+        default=None,
+        ge=512,
+        description="RAM in MB. Omit to use the provider default.",
+    )
+    disk: int = Field(
+        default=40,
+        ge=1,
+        description="Disk size in GB",
+    )
+    ip_offset: int = Field(
+        ...,
+        ge=0,
+        description="Offset added to the subnet base to calculate this VM's IP address",
+    )
+
+
 class ProxmoxConfig(BaseModel):
     """Proxmox provider configuration."""
 
@@ -62,13 +103,13 @@ class ProxmoxConfig(BaseModel):
     )
     vm_id_start: int = Field(
         default=9000,
-        description="Starting VM ID for Proxmox. Offset per-scenario to avoid collisions in clusters.",
+        description="Starting VM ID for Proxmox. Each VM gets vm_id_start + list index.",
         ge=100,
         le=999999,
     )
     default_memory: int = Field(
         default=4096,
-        description="Default RAM in MB for all VMs. Individual VM definitions in Terraform can override this.",
+        description="Default RAM in MB for VMs that omit a memory value.",
         ge=512,
     )
 
@@ -145,15 +186,20 @@ class EnvironmentConfig(BaseModel):
         description="Prefix for VM names",
         examples=["lab", "prod"]
     )
-    scenario: str = Field(
-        ...,
-        min_length=1,
-        description="Environment scenario. Must match a key in the provider's vm_definitions."
-    )
     environment_fqdn: str = Field(
         ...,
         description="Fully qualified domain name",
         examples=["lab.local", "homelab.internal"]
+    )
+    workspace: str = Field(
+        ...,
+        min_length=1,
+        max_length=30,
+        pattern=r'^[a-zA-Z0-9][a-zA-Z0-9-]*$',
+        description="Terraform workspace name. Each spec must use a unique workspace "
+                    "to isolate its state. Auto-populated by `overtime setup` when a "
+                    "scenario is selected (e.g. lab-ad-lab-m).",
+        examples=["lab-ad-lab-m", "prod-jumphost", "my-custom-lab"]
     )
 
 
@@ -229,7 +275,7 @@ class AzureConfig(BaseModel):
     )
     default_vm_size: str = Field(
         default="Standard_B2s",
-        description="Default Azure VM size. Can be overridden per-VM in Terraform vm_definitions.",
+        description="Default Azure VM size for VMs that omit a vm_size value.",
         examples=["Standard_B2s", "Standard_D2s_v3"],
     )
     admin_username: str = Field(
@@ -298,6 +344,11 @@ class ProvisioningSpec(BaseModel):
     )
     environment: EnvironmentConfig
     ansible: AnsibleConfig
+    vms: list[VmSpec] = Field(
+        ...,
+        min_length=1,
+        description="VM definitions. Each entry describes one VM to provision.",
+    )
     secrets: SecretConfig = Field(default_factory=SecretConfig)
     jumphost: Optional[JumphostConfig] = Field(default=None, description="Linux utility server (jumphost) settings")
     configure: Optional[ConfigureConfig] = Field(default=None, description="Explicit playbook sequence for overtime configure")
@@ -312,17 +363,21 @@ class ProvisioningSpec(BaseModel):
         return self
 
     @model_validator(mode='after')
-    def validate_scenario_for_provider(self):
-        """Ensure the scenario is valid for the chosen provider."""
-        from overtime.scenarios import PROVIDER_SCENARIOS
+    def validate_unique_vm_names(self):
+        """Ensure VM names are unique."""
+        names = [vm.name for vm in self.vms]
+        dupes = [n for n in names if names.count(n) > 1]
+        if dupes:
+            raise ValueError(f'Duplicate VM names: {sorted(set(dupes))}')
+        return self
 
-        valid = PROVIDER_SCENARIOS.get(self.provider, {})
-        if self.environment.scenario not in valid:
-            raise ValueError(
-                f"Scenario '{self.environment.scenario}' is not valid for "
-                f"provider '{self.provider}'. "
-                f"Valid scenarios: {sorted(valid.keys())}"
-            )
+    @model_validator(mode='after')
+    def validate_unique_ip_offsets(self):
+        """Ensure IP offsets are unique."""
+        offsets = [vm.ip_offset for vm in self.vms]
+        dupes = [o for o in offsets if offsets.count(o) > 1]
+        if dupes:
+            raise ValueError(f'Duplicate ip_offset values: {sorted(set(dupes))}')
         return self
 
     @model_validator(mode='after')

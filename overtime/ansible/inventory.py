@@ -55,9 +55,8 @@ class AnsibleInventoryGenerator:
 
     Args:
         outputs:              Parsed Terraform outputs.
-        vm_definitions:       VM definition list for the environment (same
-                              structure as ``locals.vm_definitions`` in main.tf,
-                              with variable references already resolved).
+        vm_definitions:       VM definition list from the provisioning spec.
+                              Each dict has ``name``, ``role``, and ``os`` keys.
         name_prefix:          Environment name prefix (e.g. ``"lab"``).
         fqdn:                 Environment FQDN (e.g. ``"lab.local"``).
         ansible_user:         Ansible connection username.
@@ -126,7 +125,7 @@ class AnsibleInventoryGenerator:
         for group, vms in self._build_role_map().items():
             hosts: Dict = {}
             for vm in vms:
-                hostname = f"{self._name_prefix}-{vm['name_suffix']}"
+                hostname = f"{self._name_prefix}-{vm['name']}"
                 ip_with_cidr = ip_map.get(hostname)
 
                 if ip_with_cidr is None:
@@ -139,8 +138,8 @@ class AnsibleInventoryGenerator:
                 ip = ip_with_cidr.split("/")[0]
                 hosts[hostname] = {"ansible_host": ip}
 
-            # Connection vars per group based on os_type
-            group_vars = _connection_vars_for(vms[0].get("os_type", "cloud-init"))
+            # Connection vars per group based on os
+            group_vars = _connection_vars_for(vms[0].get("os", "linux"))
             flat_groups[group] = {"hosts": hosts, "vars": group_vars}
 
         # -- nest child groups under parents (e.g. k8s_ctrl → k8s) ---------

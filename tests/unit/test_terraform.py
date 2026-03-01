@@ -57,56 +57,38 @@ def sample_config() -> dict:
             "vm_gateway":            "192.168.0.1",
         },
         "environment": {
-            "scenario":                "jumphost",
             "environment_name_prefix": "lab",
             "environment_fqdn":        "lab.local",
+            "workspace":               "lab-jumphost",
         },
         "ansible": {
             "ansible_user":     "overtimeadmin",
             "ansible_password": "ansible_secret",
             "ssh_pub_key":      "ssh-ed25519 AAAA test@host",
         },
+        "vms": [
+            {"name": "lutil-1a", "os": "linux", "role": "lutil", "cpu": 2, "disk": 32, "ip_offset": 15},
+        ],
     }
 
 
 # Module-level VM definition sets used by multiple test classes
+# These use the config format (name, os, role) for inventory tests.
 
 CTRL_VM_DEFS = [
-    {
-        "name_suffix": "lutil-1a", "role": "lutil", "cpu": 2,
-        "memory": 4096, "disk_size": "32G", "os_type": "cloud-init",
-        "ip_offset": 15,
-    },
+    {"name": "lutil-1a", "role": "lutil", "os": "linux", "cpu": 2, "disk": 32, "ip_offset": 15},
 ]
 
 DEV_VM_DEFS = [
-    {
-        "name_suffix": "k8s-1a", "role": "ctrl", "cpu": 2, "memory": 4096,
-        "disk_size": "32G", "os_type": "cloud-init", "ip_offset": 60,
-    },
-    {
-        "name_suffix": "k8s-1b", "role": "ctrl", "cpu": 2, "memory": 4096,
-        "disk_size": "32G", "os_type": "cloud-init", "ip_offset": 61,
-    },
-    {
-        "name_suffix": "k8s-1d", "role": "work", "cpu": 4, "memory": 8192,
-        "disk_size": "32G", "os_type": "cloud-init", "ip_offset": 63,
-    },
+    {"name": "k8s-1a", "role": "ctrl", "os": "linux", "cpu": 2, "disk": 32, "ip_offset": 60},
+    {"name": "k8s-1b", "role": "ctrl", "os": "linux", "cpu": 2, "disk": 32, "ip_offset": 61},
+    {"name": "k8s-1d", "role": "work", "os": "linux", "cpu": 4, "disk": 32, "ip_offset": 63},
 ]
 
 XS_WINDOWS_VM_DEFS = [
-    {
-        "name_suffix": "ad-1a", "role": "ad", "cpu": 2, "memory": 4096,
-        "disk_size": "40G", "os_type": "windows", "ip_offset": 10,
-    },
-    {
-        "name_suffix": "wutil-1a", "role": "wutil", "cpu": 2, "memory": 4096,
-        "disk_size": "40G", "os_type": "windows", "ip_offset": 20,
-    },
-    {
-        "name_suffix": "gen-1a", "role": "general", "cpu": 2, "memory": 4096,
-        "disk_size": "40G", "os_type": "windows", "ip_offset": 50,
-    },
+    {"name": "ad-1a",    "role": "ad",      "os": "windows", "cpu": 2, "disk": 40, "ip_offset": 10},
+    {"name": "wutil-1a", "role": "wutil",   "os": "windows", "cpu": 2, "disk": 40, "ip_offset": 20},
+    {"name": "gen-1a",   "role": "general", "os": "windows", "cpu": 2, "disk": 40, "ip_offset": 50},
 ]
 
 
@@ -156,12 +138,12 @@ class TestTerraformOutputs:
         assert outputs.wutil_ip is None
 
     def test_all_vm_ips_returns_full_map(self, tf_output_json):
-        """all_vm_ips returns every name→IP pair from the output."""
+        """all_vm_ips returns every name->IP pair from the output."""
         outputs = TerraformOutputs.from_json(tf_output_json)
         assert outputs.all_vm_ips == {"lab-lutil-1a": "192.168.0.15/24"}
 
     def test_all_vm_ids_returns_full_map(self, tf_output_json):
-        """all_vm_ids returns every name→VMID pair from the output."""
+        """all_vm_ids returns every name->VMID pair from the output."""
         outputs = TerraformOutputs.from_json(tf_output_json)
         assert outputs.all_vm_ids == {"lab-lutil-1a": 9100}
 
@@ -200,25 +182,25 @@ class TestPveOrchestrator:
         """When the workspace exists the select succeeds and no new is issued."""
         with patch.object(orchestrator, "_run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
-            orchestrator.ensure_workspace("lab", "ctrl")
+            orchestrator.ensure_workspace("lab")
         mock_run.assert_called_once_with(
-            ["workspace", "select", "env-lab-ctrl"], check=False, capture=True,
+            ["workspace", "select", "env-lab"], check=False, capture=True,
         )
 
     def test_ensure_workspace_creates_on_miss(self, orchestrator):
         """When select fails, ``workspace new`` is called."""
         with patch.object(orchestrator, "_run") as mock_run:
             mock_run.side_effect = [
-                MagicMock(returncode=1),  # select → not found
-                MagicMock(returncode=0),  # new    → ok
+                MagicMock(returncode=1),  # select -> not found
+                MagicMock(returncode=0),  # new    -> ok
             ]
-            orchestrator.ensure_workspace("lab", "dev")
+            orchestrator.ensure_workspace("lab")
 
         assert mock_run.call_count == 2
         mock_run.assert_any_call(
-            ["workspace", "select", "env-lab-dev"], check=False, capture=True,
+            ["workspace", "select", "env-lab"], check=False, capture=True,
         )
-        mock_run.assert_any_call(["workspace", "new", "env-lab-dev"])
+        mock_run.assert_any_call(["workspace", "new", "env-lab"])
 
     # -- tfvars writing ----------------------------------------------------
 
@@ -238,6 +220,19 @@ class TestPveOrchestrator:
 
         assert tfvars["dns_servers"] == ["192.168.0.1", "8.8.8.8"]
 
+    def test_write_tfvars_includes_vm_list(self, orchestrator, tmp_path, sample_config):
+        """vm_list is written to tfvars.json with Terraform-format keys."""
+        orchestrator._write_tfvars(sample_config)
+        tfvars = json.loads((tmp_path / "terraform.tfvars.json").read_text())
+
+        assert "vm_list" in tfvars
+        assert len(tfvars["vm_list"]) == 1
+        vm = tfvars["vm_list"][0]
+        assert vm["name_suffix"] == "lutil-1a"
+        assert vm["role"] == "lutil"
+        assert vm["os_type"] == "cloud-init"  # linux -> cloud-init for Proxmox
+        assert vm["ip_offset"] == 15
+
     # -- plan & apply ------------------------------------------------------
 
     def test_plan_invokes_workspace_then_plan(self, orchestrator, sample_config):
@@ -249,7 +244,7 @@ class TestPveOrchestrator:
         ):
             orchestrator.plan(sample_config)
 
-        mock_ws.assert_called_once_with("lab", "jumphost")
+        mock_ws.assert_called_once_with("lab-jumphost")
         mock_run.assert_called_once_with(["plan", "-input=false"])
 
     def test_apply_passes_auto_approve(self, orchestrator, sample_config, tf_output_json):
@@ -353,7 +348,7 @@ class TestAnsibleInventoryGenerator:
             assert k8s_children[subgroup]["vars"]["ansible_connection"] == "ssh"
 
     def test_non_k8s_scenarios_unaffected(self):
-        """AD scenario inventory has flat groups — no children nesting."""
+        """AD scenario inventory has flat groups -- no children nesting."""
         inv = self._make_gen(self._windows_outputs(), XS_WINDOWS_VM_DEFS).generate()
 
         ad_group = inv["all"]["children"]["ad"]
@@ -391,4 +386,3 @@ class TestAnsibleInventoryGenerator:
         """ansible_ssh_private_key_file is not set when ssh_key_path is omitted."""
         inv = self._make_gen(self._linux_outputs(), DEV_VM_DEFS).generate()
         assert "ansible_ssh_private_key_file" not in inv["all"]["vars"]
-

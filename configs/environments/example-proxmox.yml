@@ -6,6 +6,8 @@
 #   overtime create   <your-spec.yml>
 #   overtime configure <your-spec.yml>
 #
+# Or use `overtime setup` to generate a spec interactively (with scenario templates).
+#
 # Secrets — two options (pick one):
 #   1. Environment variables (recommended): export PM_PASSWORD=... (or PM_API_TOKEN=...) before running overtime
 #   2. 1Password: use op:// paths (e.g. ${secret:op://vault/item/field})
@@ -34,18 +36,53 @@ proxmox:
   subnet_cidr: "192.168.0.0/24"               # subnet CIDR for VM addressing
   vm_gateway: "192.168.0.1"                    # default gateway IP
   # vm_id_start: 9000                            # starting VM ID; change to avoid collisions in multi-node clusters
-  # default_memory: 4096                          # default RAM in MB for all VMs; per-VM overrides in Terraform take precedence
+  # default_memory: 4096                          # default RAM in MB; omit per-VM memory to use this
 
 environment:
   environment_name_prefix: "lab"                 # prefix for VM names (1-10 chars)
-  scenario: "ad-lab-m"                           # run 'overtime scenarios -p proxmox' for options
   environment_fqdn: "lab.local"                  # FQDN for the environment
+  workspace: "lab-ad-lab-m"                      # unique Terraform workspace name (isolates state per spec)
 
 ansible:
-  ansible_user: "ot-bootstrap"                   # cloud-init also creates this user on Linux; Ansible connects as it; Cloudbase-Init currently doesn't support passing in a username
+  ansible_user: "ot-bootstrap"                   # cloud-init also creates this user on Linux; Ansible connects as it
   ansible_password: "${secret:ansible_password}" # export ANSIBLE_PASSWORD=...
   ssh_pub_key: ""                                # SSH public key for Linux VMs (leave blank if not using key auth)
   # ssh_key: "~/.ssh/lab-key"                    # path to SSH private key (optional)
+
+# VM definitions — customize this list to add, remove, or modify VMs.
+# Use `overtime setup` to pre-populate from a scenario template, or define your own.
+# Each VM needs: name, os (windows/linux), role, ip_offset. Optional: cpu, memory, disk.
+vms:
+  - name: ad-1a
+    os: windows
+    role: ad
+    cpu: 2
+    disk: 40
+    ip_offset: 10
+  - name: ad-2a
+    os: windows
+    role: ad
+    cpu: 2
+    disk: 40
+    ip_offset: 11
+  - name: wutil-1a
+    os: windows
+    role: wutil
+    cpu: 2
+    disk: 40
+    ip_offset: 20
+  - name: gen-1a
+    os: windows
+    role: general
+    cpu: 2
+    disk: 40
+    ip_offset: 30
+  - name: gen-1b
+    os: windows
+    role: general
+    cpu: 2
+    disk: 40
+    ip_offset: 31
 
 # Optional: linux utility server settings
 jumphost:

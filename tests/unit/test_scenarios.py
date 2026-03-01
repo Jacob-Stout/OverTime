@@ -1,4 +1,4 @@
-"""Tests for the scenario registry and provider-scenario validation."""
+"""Tests for the scenario template library and provider-scenario lookup."""
 
 import json
 import pytest
@@ -10,44 +10,13 @@ from overtime.scenarios import (
     PROVIDER_SCENARIOS,
     PROXMOX_SCENARIOS,
     AZURE_SCENARIOS,
-    ScenarioInfo,
+    ScenarioTemplate,
     get_scenarios_for_provider,
     default_playbooks_for,
-    scenario_keys_from_hcl,
 )
-from overtime.config.schema import ProvisioningSpec
+from overtime.config.schema import ProvisioningSpec, VmSpec
 from overtime.cli import cli
 from pydantic import ValidationError
-
-
-# ---------------------------------------------------------------------------
-# Registry-HCL sync tests
-# ---------------------------------------------------------------------------
-
-PROXMOX_MAIN_TF = Path(__file__).resolve().parents[2] / "terraform" / "proxmox" / "main.tf"
-AZURE_MAIN_TF = Path(__file__).resolve().parents[2] / "terraform" / "azure" / "main.tf"
-
-
-class TestRegistryHclSync:
-    """Verify that Python registry keys match HCL vm_definitions keys."""
-
-    def test_proxmox_scenarios_match_hcl(self):
-        hcl_keys = scenario_keys_from_hcl(PROXMOX_MAIN_TF)
-        registry_keys = set(PROXMOX_SCENARIOS.keys())
-        assert hcl_keys == registry_keys, (
-            f"Proxmox drift! "
-            f"In HCL not registry: {hcl_keys - registry_keys}, "
-            f"In registry not HCL: {registry_keys - hcl_keys}"
-        )
-
-    def test_azure_scenarios_match_hcl(self):
-        hcl_keys = scenario_keys_from_hcl(AZURE_MAIN_TF)
-        registry_keys = set(AZURE_SCENARIOS.keys())
-        assert hcl_keys == registry_keys, (
-            f"Azure drift! "
-            f"In HCL not registry: {hcl_keys - registry_keys}, "
-            f"In registry not HCL: {registry_keys - hcl_keys}"
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -70,10 +39,23 @@ class TestScenarioLookup:
         with pytest.raises(KeyError):
             get_scenarios_for_provider("gcp")
 
-    def test_all_entries_are_scenario_info(self):
+    def test_all_entries_are_scenario_template(self):
         for provider, scenarios in PROVIDER_SCENARIOS.items():
             for name, info in scenarios.items():
-                assert isinstance(info, ScenarioInfo), f"{provider}/{name}"
+                assert isinstance(info, ScenarioTemplate), f"{provider}/{name}"
+
+    def test_scenario_template_has_vms_list(self):
+        template = PROXMOX_SCENARIOS["ad-lab-m"]
+        assert isinstance(template.vms, list)
+        assert len(template.vms) > 0
+        assert "name" in template.vms[0]
+        assert "os" in template.vms[0]
+
+    def test_scenario_template_vm_summary(self):
+        template = PROXMOX_SCENARIOS["ad-lab-m"]
+        summary = template.vm_summary
+        assert "5 VMs" in summary
+        assert "Windows" in summary
 
     def test_default_playbooks_for_ad_lab_m(self):
         pbs = default_playbooks_for("proxmox", "ad-lab-m")
@@ -106,10 +88,14 @@ class TestScenarioLookup:
 
 
 # ---------------------------------------------------------------------------
-# Schema cross-validation tests
+# Schema validation tests (VmSpec, unique names, unique ip_offsets)
 # ---------------------------------------------------------------------------
 
-def _proxmox_spec_data(scenario="ad-lab-m"):
+def _proxmox_spec_data(vms=None):
+    if vms is None:
+        vms = [
+            {"name": "ad-1a", "os": "windows", "role": "ad", "ip_offset": 10},
+        ]
     return {
         "provider": "proxmox",
         "proxmox": {
@@ -126,18 +112,23 @@ def _proxmox_spec_data(scenario="ad-lab-m"):
         },
         "environment": {
             "environment_name_prefix": "lab",
-            "scenario": scenario,
             "environment_fqdn": "lab.local",
+            "workspace": "lab-ad-lab-m",
         },
         "ansible": {
             "ansible_user": "admin",
             "ansible_password": "secret",
             "ssh_pub_key": "ssh-ed25519 AAAA test@host",
         },
+        "vms": vms,
     }
 
 
-def _azure_spec_data(scenario="ad-lab-m"):
+def _azure_spec_data(vms=None):
+    if vms is None:
+        vms = [
+            {"name": "ad-1a", "os": "windows", "role": "ad", "ip_offset": 10},
+        ]
     return {
         "provider": "azure",
         "azure": {
@@ -150,8 +141,8 @@ def _azure_spec_data(scenario="ad-lab-m"):
         },
         "environment": {
             "environment_name_prefix": "lab",
-            "scenario": scenario,
             "environment_fqdn": "lab.local",
+            "workspace": "lab-ad-lab-m",
         },
         "ansible": {
             "ansible_user": "overtimeadmin",
@@ -159,42 +150,53 @@ def _azure_spec_data(scenario="ad-lab-m"):
             "ssh_pub_key": "ssh-ed25519 AAAA test@host",
             "ssh_key": "~/.ssh/id_ed25519",
         },
+        "vms": vms,
     }
 
 
-def _proxmox_token_spec_data(scenario="ad-lab-m"):
+def _proxmox_token_spec_data(vms=None):
     """Like _proxmox_spec_data but uses pm_api_token instead of pm_password."""
-    data = _proxmox_spec_data(scenario)
+    data = _proxmox_spec_data(vms)
     del data["proxmox"]["pm_password"]
     data["proxmox"]["pm_user"] = "overtime@pve!ot-token"
     data["proxmox"]["pm_api_token"] = "aabbccdd-1234-5678-9012-abcdef123456"
     return data
 
 
-class TestProviderScenarioValidation:
+class TestProvisioningSpecVmValidation:
 
-    def test_valid_proxmox_scenario(self):
-        spec = ProvisioningSpec.model_validate(_proxmox_spec_data("jumphost"))
-        assert spec.environment.scenario == "jumphost"
+    def test_valid_proxmox_spec_with_vms(self):
+        vms = [
+            {"name": "ad-1a", "os": "windows", "role": "ad", "ip_offset": 10},
+            {"name": "lutil-1a", "os": "linux", "role": "lutil", "ip_offset": 15},
+        ]
+        spec = ProvisioningSpec.model_validate(_proxmox_spec_data(vms))
+        assert len(spec.vms) == 2
+        assert spec.vms[0].name == "ad-1a"
+        assert spec.vms[0].os == "windows"
 
-    def test_invalid_proxmox_scenario(self):
-        with pytest.raises(ValidationError, match="not valid for provider"):
-            ProvisioningSpec.model_validate(_proxmox_spec_data("hub-spoke-vnet"))
+    def test_duplicate_vm_names_rejected(self):
+        vms = [
+            {"name": "ad-1a", "os": "windows", "role": "ad", "ip_offset": 10},
+            {"name": "ad-1a", "os": "windows", "role": "ad", "ip_offset": 11},
+        ]
+        with pytest.raises(ValidationError, match="Duplicate VM names"):
+            ProvisioningSpec.model_validate(_proxmox_spec_data(vms))
 
-    def test_valid_azure_scenario(self):
-        spec = ProvisioningSpec.model_validate(_azure_spec_data("k8s-dev"))
-        assert spec.environment.scenario == "k8s-dev"
+    def test_duplicate_ip_offsets_rejected(self):
+        vms = [
+            {"name": "ad-1a", "os": "windows", "role": "ad", "ip_offset": 10},
+            {"name": "ad-2a", "os": "windows", "role": "ad", "ip_offset": 10},
+        ]
+        with pytest.raises(ValidationError, match="Duplicate ip_offset"):
+            ProvisioningSpec.model_validate(_proxmox_spec_data(vms))
 
-    def test_invalid_azure_scenario(self):
-        with pytest.raises(ValidationError, match="not valid for provider"):
-            ProvisioningSpec.model_validate(_azure_spec_data("proxmox-only"))
-
-    def test_error_lists_valid_scenarios(self):
-        with pytest.raises(ValidationError, match="ad-lab-m"):
-            ProvisioningSpec.model_validate(_proxmox_spec_data("nope"))
+    def test_empty_vms_rejected(self):
+        with pytest.raises(ValidationError):
+            ProvisioningSpec.model_validate(_proxmox_spec_data(vms=[]))
 
     def test_valid_proxmox_with_api_token(self):
-        spec = ProvisioningSpec.model_validate(_proxmox_token_spec_data("jumphost"))
+        spec = ProvisioningSpec.model_validate(_proxmox_token_spec_data())
         assert spec.proxmox.pm_api_token is not None
         assert spec.proxmox.pm_password is None
 
@@ -209,6 +211,12 @@ class TestProviderScenarioValidation:
         del data["proxmox"]["pm_password"]
         with pytest.raises(ValidationError, match="pm_password or pm_api_token is required"):
             ProvisioningSpec.model_validate(data)
+
+    def test_vmspec_defaults(self):
+        vm = VmSpec(name="ad-1a", os="windows", role="ad", ip_offset=10)
+        assert vm.cpu == 2
+        assert vm.memory is None
+        assert vm.disk == 40
 
 
 # ---------------------------------------------------------------------------
@@ -235,7 +243,7 @@ class TestScenariosCommand:
         runner = CliRunner()
         result = runner.invoke(cli, ["scenarios", "-p", "proxmox"])
         assert "Active Directory lab (medium)" in result.output
-        assert "5 Windows VMs" in result.output
+        assert "5 VMs" in result.output
 
     def test_scenarios_shows_playbooks(self):
         runner = CliRunner()

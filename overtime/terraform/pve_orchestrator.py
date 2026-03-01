@@ -43,6 +43,20 @@ class PveOrchestrator(BaseOrchestrator):
         env = config.get("environment", {})
         ansible = config.get("ansible", {})
 
+        # Convert VM list to the format Terraform expects
+        vm_list = [
+            {
+                "name_suffix": vm["name"],
+                "role":        vm["role"],
+                "cpu":         vm.get("cpu", 2),
+                "memory":      vm.get("memory"),
+                "disk_size":   f"{vm.get('disk', 40)}G",
+                "os_type":     "cloud-init" if vm["os"] == "linux" else "windows",
+                "ip_offset":   vm["ip_offset"],
+            }
+            for vm in config.get("vms", [])
+        ]
+
         tfvars = {
             "pm_api_url":                proxmox.get("pm_api_url"),
             "pm_user":                   proxmox.get("pm_user"),
@@ -52,7 +66,6 @@ class PveOrchestrator(BaseOrchestrator):
             "network_bridge":            proxmox.get("network_bridge"),
             "linux_template_id":         int(proxmox.get("linux_template_id", 0)),
             "windows_template_id":       int(proxmox.get("windows_template_id", 0)),
-            "scenario":                  env.get("scenario"),
             "environment_name_prefix":   env.get("environment_name_prefix"),
             "subnet_cidr":               proxmox.get("subnet_cidr"),
             "vm_gateway":                proxmox.get("vm_gateway"),
@@ -61,6 +74,7 @@ class PveOrchestrator(BaseOrchestrator):
             "ssh_pub_key":               ansible.get("ssh_pub_key"),
             "ansible_user":              ansible.get("ansible_user", "ot-bootstrap"),
             "dns_servers":               [proxmox.get("vm_gateway", ""), "8.8.8.8"],
+            "vm_list":                   vm_list,
         }
 
         tfvars_path = self.terraform_dir / "terraform.tfvars.json"
@@ -74,11 +88,10 @@ class PveOrchestrator(BaseOrchestrator):
 
     def plan(self, config: Dict[str, Any]) -> None:
         """Generate tfvars, select workspace, and run ``terraform plan``."""
-        prefix = config["environment"]["environment_name_prefix"]
-        scenario = config["environment"]["scenario"]
+        workspace = config["environment"]["workspace"]
 
         self._write_tfvars(config)
-        self.ensure_workspace(prefix, scenario)
+        self.ensure_workspace(workspace)
 
         self._run(["plan", "-input=false"] + self._var_args())
 
@@ -86,11 +99,10 @@ class PveOrchestrator(BaseOrchestrator):
         self, config: Dict[str, Any], *, auto_approve: bool = False
     ) -> TerraformOutputs:
         """Generate tfvars, select workspace, apply, and return outputs."""
-        prefix = config["environment"]["environment_name_prefix"]
-        scenario = config["environment"]["scenario"]
+        workspace = config["environment"]["workspace"]
 
         self._write_tfvars(config)
-        self.ensure_workspace(prefix, scenario)
+        self.ensure_workspace(workspace)
 
         args = ["apply", "-input=false"] + self._var_args()
         if auto_approve:
@@ -103,21 +115,11 @@ class PveOrchestrator(BaseOrchestrator):
         self, config: Dict[str, Any], *, auto_approve: bool = False
     ) -> None:
         """Write tfvars, select workspace, and run ``terraform destroy``."""
-        prefix = config["environment"]["environment_name_prefix"]
-        scenario = config["environment"]["scenario"]
+        workspace = config["environment"]["workspace"]
         self._write_tfvars(config)
-        self.ensure_workspace(prefix, scenario)
+        self.ensure_workspace(workspace)
 
         args = ["destroy", "-input=false"] + self._var_args()
         if auto_approve:
             args.append("-auto-approve")
         self._run(args)
-
-    # ------------------------------------------------------------------
-    # VM definition helper (public, used by configure command)
-    # ------------------------------------------------------------------
-
-    def get_vm_definitions(self, config: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Load VM definitions for the environment in *config*."""
-        scenario = config["environment"]["scenario"]
-        return self._load_vm_definitions(scenario)

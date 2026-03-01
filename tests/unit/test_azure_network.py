@@ -31,20 +31,23 @@ def network_config() -> dict:
             "allowed_source_prefix": "*",
         },
         "environment": {
-            "scenario":                "ad-lab-m",
             "environment_name_prefix": "lab",
             "environment_fqdn":        "lab.local",
+            "workspace":               "lab-ad-lab-m",
         },
         "ansible": {
             "ansible_user":     "overtimeadmin",
             "ansible_password": "ansible_secret",
             "ssh_pub_key":      "ssh-ed25519 AAAA test@host",
         },
+        "vms": [
+            {"name": "ad-1a", "os": "windows", "role": "ad", "ip_offset": 10},
+        ],
     }
 
 
 # ---------------------------------------------------------------------------
-# TestAzureNetworkOrchestrator — 10 tests
+# TestAzureNetworkOrchestrator — 9 tests
 # ---------------------------------------------------------------------------
 
 
@@ -169,6 +172,7 @@ class TestAzureNetworkOrchestrator:
         """destroy() sets env, selects workspace, and runs terraform destroy."""
         with (
             patch.object(orchestrator, "_set_env"),
+            patch.object(orchestrator, "_write_tfvars"),
             patch.object(orchestrator, "ensure_network_workspace") as mock_ws,
             patch.object(orchestrator, "_run") as mock_run,
         ):
@@ -176,8 +180,3 @@ class TestAzureNetworkOrchestrator:
 
         mock_ws.assert_called_once_with("lab")
         mock_run.assert_called_once_with(["destroy", "-input=false", "-auto-approve"])
-
-    def test_get_vm_definitions_raises(self, orchestrator, network_config):
-        """get_vm_definitions() raises TerraformError — network has no VMs."""
-        with pytest.raises(TerraformError, match="does not manage VMs"):
-            orchestrator.get_vm_definitions(network_config)
