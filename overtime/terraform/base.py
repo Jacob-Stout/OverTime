@@ -7,8 +7,6 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Dict, Any, List
 
-import hcl2
-
 from ..utils.exceptions import TerraformError
 from .state import TerraformOutputs
 
@@ -81,61 +79,12 @@ class BaseOrchestrator(ABC):
         return result
 
     # ------------------------------------------------------------------
-    # VM definition loading (parses main.tf)
-    # ------------------------------------------------------------------
-
-    def _load_vm_definitions(self, scenario: str) -> List[Dict[str, Any]]:
-        """Parse ``main.tf`` and return the raw VM definition list.
-
-        Variable references (e.g. ``${var.network_bridge}``) are returned as
-        literal strings; subclasses may resolve them further.
-
-        Raises:
-            TerraformError: If main.tf is missing, unparseable, or lacks the
-                            requested scenario.
-        """
-        main_tf = self.terraform_dir / "main.tf"
-        if not main_tf.exists():
-            raise TerraformError(
-                f"main.tf not found at {main_tf}",
-                details="Ensure terraform_dir points to the correct directory.",
-            )
-
-        try:
-            with open(main_tf) as f:
-                parsed = hcl2.load(f)
-        except Exception as e:
-            raise TerraformError(
-                f"Failed to parse {main_tf.name} with python-hcl2",
-                details=str(e),
-            )
-
-        # hcl2 returns locals as a list of dicts (one per locals block)
-        locals_blocks = parsed.get("locals", [])
-        vm_definitions: Dict[str, Any] = {}
-        for block in locals_blocks:
-            vm_definitions.update(block.get("vm_definitions", {}))
-
-        if not vm_definitions:
-            raise TerraformError(
-                f"vm_definitions not found in any locals block of {main_tf.name}",
-            )
-
-        selected = vm_definitions.get(scenario)
-        if not selected:
-            raise TerraformError(
-                f"No VM definitions for scenario='{scenario}'",
-                details=f"Available scenarios: {list(vm_definitions.keys())}",
-            )
-        return selected
-
-    # ------------------------------------------------------------------
     # Workspace management
     # ------------------------------------------------------------------
 
-    def ensure_workspace(self, prefix: str, scenario: str) -> None:
-        """Select the workspace ``env-<prefix>-<scenario>``, creating it if needed."""
-        workspace = f"env-{prefix}-{scenario}"
+    def ensure_workspace(self, prefix: str) -> None:
+        """Select the workspace ``env-<prefix>``, creating it if needed."""
+        workspace = f"env-{prefix}"
 
         result = self._run(
             ["workspace", "select", workspace],
@@ -182,9 +131,3 @@ class BaseOrchestrator(ABC):
         self, config: Dict[str, Any], *, auto_approve: bool = False
     ) -> None:
         """Select workspace and run ``terraform destroy``."""
-
-    @abstractmethod
-    def get_vm_definitions(
-        self, config: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
-        """Load and resolve VM definitions for the environment in *config*."""

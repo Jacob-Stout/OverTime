@@ -26,7 +26,7 @@ from overtime.cli import cli
 class TestReadinessProbes:
     """wait_for_port, wait_for_vm, wait_for_all_vms."""
 
-    # ── wait_for_port ─────────────────────────────────────────────────
+    # -- wait_for_port --
 
     @patch("overtime.utils.probes.socket.create_connection")
     def test_wait_for_port_returns_elapsed_on_success(self, mock_conn):
@@ -50,7 +50,7 @@ class TestReadinessProbes:
         with pytest.raises(ProbeTimeout, match="not reachable after 5s"):
             wait_for_port("10.0.0.1", 22, timeout=5, interval=1)
 
-    # ── wait_for_vm ───────────────────────────────────────────────────
+    # -- wait_for_vm --
 
     @patch("overtime.utils.probes.wait_for_port", return_value=2.5)
     def test_wait_for_vm_strips_cidr(self, mock_port):
@@ -75,7 +75,7 @@ class TestReadinessProbes:
         wait_for_vm("v3", "1.1.1.3", "windows", timeout=10)
         assert mock_port.call_args_list[-1] == call("1.1.1.3", 5985, timeout=10, interval=10)
 
-        # unknown → default 22
+        # unknown -> default 22
         wait_for_vm("v4", "1.1.1.4", "bsd", timeout=10)
         assert mock_port.call_args_list[-1] == call("1.1.1.4", 22, timeout=10, interval=10)
 
@@ -93,32 +93,32 @@ class TestReadinessProbes:
 # ===========================================================================
 
 
-# Shared VM definition sets
+# Shared VM definition sets — using config format (name, os, role)
 
 _JUMPHOST_DEFS = [
-    {"role": "lutil", "name_suffix": "lutil-1a"},
+    {"role": "lutil", "name": "lutil-1a", "os": "linux"},
 ]
 
 _AD_LAB_M_DEFS = [
-    {"role": "ad",       "name_suffix": "ad-1a"},
-    {"role": "ad",       "name_suffix": "ad-2a"},
-    {"role": "wutil",    "name_suffix": "wutil-1a"},
-    {"role": "general",  "name_suffix": "gen-1a"},
-    {"role": "general",  "name_suffix": "gen-1b"},
+    {"role": "ad",       "name": "ad-1a",    "os": "windows"},
+    {"role": "ad",       "name": "ad-2a",    "os": "windows"},
+    {"role": "wutil",    "name": "wutil-1a", "os": "windows"},
+    {"role": "general",  "name": "gen-1a",   "os": "windows"},
+    {"role": "general",  "name": "gen-1b",   "os": "windows"},
 ]
 
 _K8S_DEV_DEFS = [
-    {"role": "ctrl", "name_suffix": "k8s-1a"},
-    {"role": "ctrl", "name_suffix": "k8s-1b"},
-    {"role": "work", "name_suffix": "k8s-1d"},
+    {"role": "ctrl", "name": "k8s-1a", "os": "linux"},
+    {"role": "ctrl", "name": "k8s-1b", "os": "linux"},
+    {"role": "work", "name": "k8s-1d", "os": "linux"},
 ]
 
 
 class TestConfigurePlan:
-    """build_configure_plan — system steps, user steps, edge cases."""
+    """build_configure_plan -- system steps, user steps, edge cases."""
 
     def test_empty_manifest_only_system_steps(self):
-        """No user playbooks → only probe_targets (no lutil in defs)."""
+        """No user playbooks -> only probe_targets (no lutil in defs)."""
         plan = build_configure_plan(_K8S_DEV_DEFS, [])
         assert len(plan) == 1
         assert plan[0].playbook == "probe_targets.yml"
@@ -212,12 +212,12 @@ class TestRemoteRunner:
         runner._client = _mock_client()
         return runner
 
-    # ── bootstrap_ansible ─────────────────────────────────────────────
+    # -- bootstrap_ansible --
 
     def test_bootstrap_ansible_skips_when_present(self):
         """If 'which ansible' exits 0, no install command is issued."""
         runner = self._runner()
-        # which ansible → exit 0
+        # which ansible -> exit 0
         stdout = MagicMock()
         stdout.channel.recv_exit_status.return_value = 0
         runner._client.exec_command.return_value = (None, stdout, MagicMock())
@@ -231,11 +231,11 @@ class TestRemoteRunner:
         """If 'which ansible' exits 1, the PPA install command is issued."""
         runner = self._runner()
 
-        # First call: which ansible → exit 1
+        # First call: which ansible -> exit 1
         which_stdout = MagicMock()
         which_stdout.channel.recv_exit_status.return_value = 1
 
-        # Second call: install → exit 0
+        # Second call: install -> exit 0
         install_stdout = MagicMock()
         install_stdout.channel.recv_exit_status.return_value = 0
         install_stderr = MagicMock()
@@ -253,7 +253,7 @@ class TestRemoteRunner:
         assert "ansible" in install_cmd
         assert "apt-get install" in install_cmd
 
-    # ── upload ────────────────────────────────────────────────────────
+    # -- upload --
 
     def test_upload_inventory_correct_remote_path(self, tmp_path):
         """upload_inventory places the file at /home/admin/overtime/inventory/<name>."""
@@ -285,7 +285,7 @@ class TestRemoteRunner:
         assert remote_dir == "/home/admin/overtime/playbooks"
         assert sftp.put.call_count == 2  # only .yml files
 
-    # ── run_step / _run_setup_jumphost ────────────────────────────────
+    # -- run_step / _run_setup_jumphost --
 
     def test_run_step_builds_correct_command(self):
         """run_step assembles ansible-playbook with -i, --limit, -e."""
@@ -329,7 +329,7 @@ class TestRemoteRunner:
         assert "-e" not in cmd
         assert result.exit_code == 0
 
-    # ── run_plan ──────────────────────────────────────────────────────
+    # -- run_plan --
 
     def test_run_plan_stops_on_first_failure(self):
         """run_plan halts at the first non-zero exit and does not continue."""
@@ -352,9 +352,9 @@ class TestRemoteRunner:
             (None, MagicMock(), MagicMock()),
             # test -f step1
             (None, exists_stdout, MagicMock()),
-            # step1 ansible-playbook → exit 1
+            # step1 ansible-playbook -> exit 1
             (None, self._failing_stdout(), self._stderr_mock()),
-            # test -f step2 — should NOT be reached
+            # test -f step2 -- should NOT be reached
             (None, exists_stdout, MagicMock()),
         ]
 
@@ -392,7 +392,7 @@ class TestRemoteRunner:
         # echo $HOME returns /home/admin
         home_stdout = MagicMock()
         home_stdout.read.return_value = b"/home/admin\n"
-        # mkdir stdout — must support recv_exit_status for the wait
+        # mkdir stdout -- must support recv_exit_status for the wait
         mkdir_stdout = MagicMock()
         mkdir_stdout.channel.recv_exit_status.return_value = 0
         # chmod 600 call (default mock is fine)
@@ -425,7 +425,7 @@ class TestRemoteRunner:
 
 
 class TestSetupWizard:
-    """default_playbooks_for(provider, scenario) → default playbook list."""
+    """default_playbooks_for(provider, scenario) -> default playbook list."""
 
     def test_ad_lab_m_includes_secondary_ad(self):
         """ad-lab-m list contains secondary_ad_setup.yml (2 DCs)."""
@@ -460,16 +460,16 @@ class TestSetupWizard:
 class TestSetupCommand:
     """Test the interactive `overtime setup` command via CliRunner."""
 
-    # Proxmox prompts (password auth): provider, env_prefix, scenario, fqdn,
-    #   use_token, api_url, user, tls_insecure, node, storage, bridge,
+    # Proxmox prompts (password auth): provider, env_prefix, fqdn,
+    #   scenario, use_token, api_url, user, tls_insecure, node, storage, bridge,
     #   linux_template, windows_template, subnet_cidr, gateway, vm_id_start,
-    #   default_memory, ansible_user, ssh_pub_key
+    #   default_memory, ansible_user, ssh_pub_key, ssh_key_path
     _PROXMOX_INPUT = "\n".join([
         "proxmox",          # provider
         "lab",              # env prefix
-        "ad-lab-m",         # scenario
         "lab.local",        # fqdn
-        "n",                # use API token? → no (password mode)
+        "ad-lab-m",         # scenario
+        "n",                # use API token? -> no (password mode)
         "https://10.0.0.1:8006",  # api url
         "root@pam",         # user
         "y",                # tls insecure
@@ -491,9 +491,9 @@ class TestSetupCommand:
     _PROXMOX_TOKEN_INPUT = "\n".join([
         "proxmox",          # provider
         "lab",              # env prefix
-        "ad-lab-m",         # scenario
         "lab.local",        # fqdn
-        "y",                # use API token? → yes
+        "ad-lab-m",         # scenario
+        "y",                # use API token? -> yes
         "https://10.0.0.1:8006",  # api url
         "overtime@pve!ot-token",  # token ID
         "y",                # tls insecure
@@ -514,8 +514,8 @@ class TestSetupCommand:
     _AZURE_INPUT = "\n".join([
         "azure",            # provider
         "lab",              # env prefix
-        "k8s-dev",          # scenario
         "lab.local",        # fqdn
+        "k8s-dev",          # scenario
         "12345678-1234-1234-1234-123456789abc",  # subscription
         "ot-rg",            # resource group
         "eastus",           # location
@@ -543,9 +543,11 @@ class TestSetupCommand:
         assert data["provider"] == "proxmox"
         assert data["proxmox"]["pm_api_url"] == "https://10.0.0.1:8006"
         assert data["proxmox"]["pm_password"] == "${secret:pm_password}"
-        assert data["environment"]["scenario"] == "ad-lab-m"
+        assert "vms" in data
+        assert isinstance(data["vms"], list)
+        assert len(data["vms"]) > 0
         assert data["ansible"]["ansible_password"] == "${secret:ansible_password}"
-        assert "ci_password" not in data["environment"]
+        assert "ci_password" not in data.get("environment", {})
         assert data["secrets"]["backend"] == "dotenv"
 
     def test_setup_azure_writes_valid_yaml(self, tmp_path):
@@ -581,8 +583,8 @@ class TestSetupCommand:
     def test_setup_jumphost_includes_setup_jumphost(self, tmp_path):
         """jumphost scenario includes setup_jumphost.yml in configure section."""
         jumphost_input = "\n".join([
-            "proxmox", "ctrl", "jumphost", "ctrl.local",
-            "n",  # use API token? → no (password mode)
+            "proxmox", "ctrl", "ctrl.local", "jumphost",
+            "n",  # use API token? -> no (password mode)
             "https://10.0.0.1:8006", "root@pam", "y", "pve", "local-lvm",
             "vmbr0", "222", "213", "192.168.0.0/24", "192.168.0.1",
             "9000", "4096", "administrator", "ssh-ed25519 AAAA key",
@@ -595,7 +597,7 @@ class TestSetupCommand:
         assert result.exit_code == 0, result.output
 
         data = yaml.safe_load(out.read_text())
-        assert data["environment"]["scenario"] == "jumphost"
+        assert "vms" in data
         assert "configure" in data
         names = [p["playbook"] for p in data["configure"]["playbooks"]]
         assert names == ["setup_jumphost.yml"]
@@ -654,7 +656,7 @@ class TestSetupCommand:
         result = runner.invoke(cli, ["setup"], input=self._PROXMOX_INPUT)
 
         assert result.exit_code == 0, result.output
-        expected = tmp_path / "configs" / "environments" / "lab_ad-lab-m-provisioning-spec.yml"
+        expected = tmp_path / "configs" / "environments" / "lab-ad-lab-m-provisioning-spec.yml"
         assert expected.exists()
         data = yaml.safe_load(expected.read_text())
-        assert data["environment"]["scenario"] == "ad-lab-m"
+        assert "vms" in data

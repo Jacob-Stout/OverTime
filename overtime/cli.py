@@ -58,10 +58,22 @@ def _resolved_config(spec) -> dict:
     config: dict = {
         "provider": spec.provider,
         "environment": {
-            "scenario":                spec.environment.scenario,
             "environment_name_prefix": spec.environment.environment_name_prefix,
             "environment_fqdn":        spec.environment.environment_fqdn,
+            "workspace":               spec.environment.workspace,
         },
+        "vms": [
+            {
+                "name": vm.name,
+                "os": vm.os,
+                "role": vm.role,
+                "cpu": vm.cpu,
+                "memory": vm.memory,
+                "disk": vm.disk,
+                "ip_offset": vm.ip_offset,
+            }
+            for vm in spec.vms
+        ],
         "ansible": {
             "ansible_user":     spec.ansible.ansible_user,
             "ansible_password": spec.ansible.ansible_password.get_secret_value(),
@@ -151,8 +163,8 @@ def create(ctx, config_file: Path, auto_approve: bool):
 
         # Show summary
         click.echo(f"\nEnvironment: {spec.environment.environment_name_prefix}")
-        click.echo(f"Scenario: {spec.environment.scenario}")
         click.echo(f"Provider: {spec.provider}")
+        click.echo(f"VMs: {len(spec.vms)}")
 
         # Confirm
         if not auto_approve:
@@ -217,7 +229,7 @@ def destroy(ctx, config_file: Path, auto_approve: bool):
         if not auto_approve:
             click.secho(
                 f"\n⚠️  WARNING: This will destroy environment "
-                f"'{spec.environment.environment_name_prefix}-{spec.environment.scenario}'",
+                f"'{spec.environment.environment_name_prefix}' ({len(spec.vms)} VMs)",
                 fg='red',
                 bold=True
             )
@@ -252,7 +264,7 @@ def configure(ctx, config_file: Path, dry_run: bool, keep_inventory: bool):
         config = _resolved_config(spec)
         orchestrator = _make_orchestrator(config)
         orchestrator.init()
-        orchestrator.ensure_workspace(config["environment"]["environment_name_prefix"], config["environment"]["scenario"])
+        orchestrator.ensure_workspace(config["environment"]["workspace"])
 
         # ── 1. Resolve jumphost IP ──────────────────────────────────────
         jumphost_section = config.get("jumphost", {})
@@ -282,7 +294,7 @@ def configure(ctx, config_file: Path, dry_run: bool, keep_inventory: bool):
         click.secho(f"  linux utility server reachable in {probe.elapsed:.1f}s", fg="green")
 
         # ── 3. Build plan ───────────────────────────────────────────────
-        vm_defs           = orchestrator.get_vm_definitions(config)
+        vm_defs           = config["vms"]
         playbook_manifest = config.get("configure", {}).get("playbooks", [])
 
         from .ansible.configure_plan import build_configure_plan
@@ -318,8 +330,8 @@ def configure(ctx, config_file: Path, dry_run: bool, keep_inventory: bool):
             ansible_password=config["ansible"]["ansible_password"],
             ssh_key_path=ssh_key_remote,
         )
-        scenario = config["environment"]["scenario"]
-        inventory_path = Path(f"{prefix}_{scenario}_ansible_inventory.yml")
+        workspace = config["environment"]["workspace"]
+        inventory_path = Path(f"{workspace}_ansible_inventory.yml")
         inventory_path.write_text(generator.to_yaml())
         click.secho(f"  Inventory written to {inventory_path}", fg="green")
 
@@ -394,7 +406,7 @@ def validate_config(config_file: Path):
         click.secho("✓ Configuration is valid", fg='green')
         click.echo(f"\nProvider: {spec.provider}")
         click.echo(f"Environment: {spec.environment.environment_name_prefix}")
-        click.echo(f"Scenario: {spec.environment.scenario}")
+        click.echo(f"VMs: {len(spec.vms)}")
 
     except OvertimeError as e:
         click.secho(f"✗ Configuration invalid", fg='red')
@@ -409,13 +421,13 @@ def network():
     """Manage shared Azure network infrastructure (RG + VNet).
 
     Azure deployments require shared network infrastructure (Resource Group
-    and Virtual Network) to be created before per-scenario VMs.
+    and Virtual Network) to be created before VMs.
 
     \b
     Workflow:
       overtime network create <spec>   # one-time: creates RG + VNet
-      overtime create <spec>           # per-scenario: creates subnet + VMs
-      overtime destroy <spec>          # per-scenario: destroys subnet + VMs
+      overtime create <spec>           # creates subnet + VMs
+      overtime destroy <spec>          # destroys subnet + VMs
       overtime network destroy <spec>  # teardown: destroys RG + VNet
     """
     pass
@@ -428,7 +440,7 @@ def network():
 def network_create(ctx, config_file: Path, auto_approve: bool):
     """Create shared network infrastructure (Resource Group + VNet).
 
-    Run this once before creating per-scenario VMs with ``overtime create``.
+    Run this once before creating VMs with ``overtime create``.
     """
     try:
         spec = load_provisioning_spec(config_file)
@@ -486,7 +498,7 @@ def network_plan(ctx, config_file: Path):
 def network_destroy(ctx, config_file: Path, auto_approve: bool):
     """Destroy shared network infrastructure (RG + VNet).
 
-    Only run after all per-scenario VMs have been destroyed.
+    Only run after all VMs have been destroyed.
     """
     try:
         spec = load_provisioning_spec(config_file)
@@ -498,7 +510,7 @@ def network_destroy(ctx, config_file: Path, auto_approve: bool):
             click.secho(
                 f"\n  WARNING: This will destroy the Resource Group "
                 f"'{spec.azure.resource_group}' and VNet '{spec.azure.vnet_name}'. "
-                f"Ensure all scenario VMs are destroyed first.",
+                f"Ensure all VMs are destroyed first.",
                 fg='red', bold=True,
             )
             click.confirm('Are you sure?', abort=True)
@@ -518,13 +530,14 @@ def network_destroy(ctx, config_file: Path, auto_approve: bool):
 @cli.command('scenarios')
 @click.option('--provider', '-p',
               type=click.Choice(['proxmox', 'azure'], case_sensitive=False),
-              default=None, help='Show scenarios for a specific provider only.')
+              default=None, help='Show scenario templates for a specific provider only.')
 @click.option('--json', 'as_json', is_flag=True, help='Output as JSON.')
 def scenarios_cmd(provider: str | None, as_json: bool):
-    """List available scenarios for each provider.
+    """List available scenario templates for each provider.
 
-    Shows providers, their scenarios, VM topology summaries, and the
-    default playbooks that ``overtime setup`` would generate.
+    Scenario templates are pre-built VM + playbook configurations that
+    ``overtime setup`` can expand into a provisioning spec.  You can also
+    write your own VM list from scratch.
     """
     from .scenarios import PROVIDER_SCENARIOS
 
@@ -536,14 +549,15 @@ def scenarios_cmd(provider: str | None, as_json: bool):
                 continue
             output[prov] = {
                 name: {
-                    "description": info.description,
-                    "vm_summary": info.vm_summary,
+                    "description": tmpl.description,
+                    "vm_summary": tmpl.vm_summary,
+                    "vms": tmpl.vms,
                     "default_playbooks": [
                         {"playbook": p.playbook, "targets": p.targets}
-                        for p in info.default_playbooks
+                        for p in tmpl.default_playbooks
                     ],
                 }
-                for name, info in scens.items()
+                for name, tmpl in scens.items()
             }
         click.echo(json_mod.dumps(output, indent=2))
         return
@@ -558,17 +572,18 @@ def scenarios_cmd(provider: str | None, as_json: bool):
         click.secho(f"\n  {prov}", fg='cyan', bold=True)
         click.echo(f"  {'=' * len(prov)}")
 
-        for name, info in scens.items():
+        for name, tmpl in scens.items():
             click.echo(f"\n    {name}")
-            click.echo(f"      {info.description}")
-            click.echo(f"      VMs: {info.vm_summary}")
+            click.echo(f"      {tmpl.description}")
+            click.echo(f"      {tmpl.vm_summary}")
 
-            if info.default_playbooks:
+            for vm in tmpl.vms:
+                click.echo(f"        - {vm['name']:12s}  role={vm['role']:<8s}  os={vm['os']}")
+
+            if tmpl.default_playbooks:
                 click.echo("      Default playbooks:")
-                for pb in info.default_playbooks:
+                for pb in tmpl.default_playbooks:
                     click.echo(f"        - {pb.playbook}  (targets: {pb.targets})")
-            else:
-                click.echo("      Default playbooks: (none)")
 
     click.echo()
 
@@ -579,12 +594,11 @@ def setup(output_file: str | None):
     """Interactively generate a starter provisioning spec YAML file.
 
     If OUTPUT_FILE is omitted, the file is written to
-    configs/environments/<prefix>_<scenario>-provisioning-spec.yml
+    configs/environments/<prefix>-provisioning-spec.yml
     so that .gitignore excludes it automatically.
 
-    Prompts for provider, environment, and connection details, then writes
-    a YAML spec with ${secret:...} placeholders for passwords.  Default
-    playbooks for the chosen scenario are included automatically.
+    Optionally pick a scenario template to pre-populate the VM list and
+    playbooks, or start with a blank spec and define VMs manually.
     """
     import yaml
     from .scenarios import get_scenarios_for_provider, default_playbooks_for
@@ -599,25 +613,20 @@ def setup(output_file: str | None):
     # ── Environment ───────────────────────────────────────────────────
     click.echo("\n-- Environment --")
     env_prefix = click.prompt("Environment name prefix (1-10 chars)", default="lab")
-    provider_scenarios = get_scenarios_for_provider(provider)
-    scenario = click.prompt(
-        "Scenario",
-        type=click.Choice(sorted(provider_scenarios.keys()), case_sensitive=False),
-    )
     env_fqdn = click.prompt("Environment FQDN", default="lab.local")
 
-    # ── Resolve output path ────────────────────────────────────────────
-    if output_file is None:
-        env_dir = Path("configs/environments")
-        env_dir.mkdir(parents=True, exist_ok=True)
-        output_path = env_dir / f"{env_prefix}_{scenario}-provisioning-spec.yml"
-    else:
-        output_path = Path(output_file)
+    # ── Scenario template (optional) ─────────────────────────────────
+    provider_scenarios = get_scenarios_for_provider(provider)
+    scenario_choices = sorted(provider_scenarios.keys())
 
-    if output_path.exists():
-        click.confirm(
-            f"\n  {output_path} already exists. Overwrite?", abort=True
-        )
+    click.echo("\n-- Scenario Template --")
+    click.echo("  Choose a scenario to pre-populate VMs and playbooks,")
+    click.echo("  or choose 'custom' to start with an empty VM list.")
+    scenario = click.prompt(
+        "Scenario",
+        type=click.Choice(scenario_choices + ["custom"], case_sensitive=False),
+        default=scenario_choices[0],
+    )
 
     # ── Provider-specific ─────────────────────────────────────────────
     spec: dict = {
@@ -653,7 +662,7 @@ def setup(output_file: str | None):
             "windows_template_id": click.prompt("Windows template VM ID"),
             "subnet_cidr": click.prompt("Subnet CIDR", default="192.168.0.0/24"),
             "vm_gateway": click.prompt("VM gateway IP", default="192.168.0.1"),
-            "vm_id_start": int(click.prompt("VM ID start (avoid collisions in clusters)", default="9000")),
+            "vm_id_start": int(click.prompt("VM ID start", default="9000")),
             "default_memory": int(click.prompt("Default VM memory in MB", default="4096")),
         })
         spec["proxmox"] = proxmox_cfg
@@ -674,11 +683,32 @@ def setup(output_file: str | None):
             ),
         }
 
+    # ── Workspace ─────────────────────────────────────────────────────
+    if scenario != "custom":
+        workspace = f"{env_prefix}-{scenario}"
+    else:
+        click.echo("\n-- Workspace --")
+        click.echo("  Each spec needs a unique workspace name for Terraform state isolation.")
+        workspace = click.prompt("Workspace name", default=env_prefix)
+
+    # ── Resolve output path ────────────────────────────────────────────
+    if output_file is None:
+        env_dir = Path("configs/environments")
+        env_dir.mkdir(parents=True, exist_ok=True)
+        output_path = env_dir / f"{workspace}-provisioning-spec.yml"
+    else:
+        output_path = Path(output_file)
+
+    if output_path.exists():
+        click.confirm(
+            f"\n  {output_path} already exists. Overwrite?", abort=True
+        )
+
     # ── Environment section ───────────────────────────────────────────
     spec["environment"] = {
         "environment_name_prefix": env_prefix,
-        "scenario": scenario,
         "environment_fqdn": env_fqdn,
+        "workspace": workspace,
     }
 
     # ── Ansible ───────────────────────────────────────────────────────
@@ -701,10 +731,17 @@ def setup(output_file: str | None):
 
     spec["ansible"] = ansible_section
 
-    # ── Default playbooks ─────────────────────────────────────────────
-    playbooks = default_playbooks_for(provider, scenario)
-    if playbooks:
-        spec["configure"] = {"playbooks": playbooks}
+    # ── VMs (from scenario template or empty) ─────────────────────────
+    if scenario != "custom":
+        tmpl = provider_scenarios[scenario]
+        spec["vms"] = tmpl.vms
+        playbooks = default_playbooks_for(provider, scenario)
+        if playbooks:
+            spec["configure"] = {"playbooks": playbooks}
+    else:
+        spec["vms"] = [
+            {"name": "example-vm", "os": "linux", "role": "lutil", "cpu": 2, "disk": 32, "ip_offset": 10},
+        ]
 
     # ── Write ─────────────────────────────────────────────────────────
     if provider == "azure":
@@ -738,6 +775,12 @@ def setup(output_file: str | None):
     # ── Next steps ────────────────────────────────────────────────────
     click.secho(f"\n  Spec written to {output_path}", fg="green")
 
+    if scenario == "custom":
+        click.echo("\n  Edit the 'vms' section to define your VMs, then:")
+    else:
+        click.echo(f"\n  Pre-populated with '{scenario}' template ({len(spec['vms'])} VMs).")
+        click.echo("  Edit the 'vms' section to customize, then:")
+
     secrets_needed = ["ansible_password"]
     if provider == "proxmox":
         if "pm_api_token" in spec["proxmox"]:
@@ -745,7 +788,6 @@ def setup(output_file: str | None):
         else:
             secrets_needed.insert(0, "pm_password")
 
-    click.echo("\n  Next steps — export secrets, then run:")
     for key in secrets_needed:
         click.echo(f"    export {key.upper()}=<value>")
 
@@ -753,7 +795,7 @@ def setup(output_file: str | None):
     click.echo(f"      overtime validate {output_path}")
     if provider == "azure":
         click.echo(f"      overtime network create {output_path}   # one-time: RG + VNet")
-        click.echo(f"      overtime create {output_path}            # per-scenario: subnet + VMs")
+        click.echo(f"      overtime create {output_path}")
     else:
         click.echo(f"      overtime create {output_path}")
 

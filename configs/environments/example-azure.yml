@@ -4,15 +4,12 @@
 # Copy this file, fill in your values, and run:
 #   overtime validate <your-spec.yml>
 #   overtime network create <your-spec.yml>    # one-time: creates RG + VNet
-#   overtime create <your-spec.yml>            # per-scenario: creates subnet + VMs
+#   overtime create <your-spec.yml>            # creates subnet + VMs
 #   overtime configure <your-spec.yml>
 #
-# IMPORTANT: Azure deployments require two steps — shared network first,
-# then per-scenario VMs.  Each scenario must use a unique subnet_cidr
-# within the vnet_cidr.  Example layout for 10.0.0.0/16:
-#   jumphost:   10.0.1.0/26   (IPs .1-.62)
-#   ad-lab-s:   10.0.1.64/26  (IPs .65-.126)
-#   ad-lab-m:   10.0.1.128/26 (IPs .129-.190)
+# Or use `overtime setup` to generate a spec interactively (with scenario templates).
+#
+# IMPORTANT: Azure deployments require two steps — shared network first, then VMs.
 #
 # Authentication: the azurerm Terraform provider uses its own credential chain
 # (Azure CLI > Service Principal > Managed Identity). Log in with `az login`
@@ -35,20 +32,55 @@ azure:
   vnet_name: "ot-vnet"                                      # virtual network name
   vnet_cidr: "10.0.0.0/16"                                  # VNet address space (CIDR)
   subnet_cidr: "10.0.1.0/24"                                # subnet (must be within vnet_cidr)
-  default_vm_size: "Standard_B2s"                            # default VM size; override per-VM in Terraform
+  default_vm_size: "Standard_B2s"                            # default VM size
   admin_username: "ot-bootstrap"                              # cannot be a reserved name (admin, root, etc.)
   allowed_source_prefix: "*"                                   # your public IP/CIDR (e.g. "203.0.113.5/32") for internet-facing labs
 
 environment:
   environment_name_prefix: "lab"                 # prefix for VM names (1-10 chars)
-  scenario: "ad-lab-m"                           # run 'overtime scenarios -p azure' for options
   environment_fqdn: "lab.local"                  # FQDN for the environment
+  workspace: "lab-ad-lab-m"                      # unique Terraform workspace name (isolates state per spec)
 
 ansible:
   ansible_user: "ot-bootstrap"                   # must match azure.admin_username
   ansible_password: "${secret:ansible_password}" # export ANSIBLE_PASSWORD=...
   ssh_pub_key: ""                                # SSH public key for Linux VMs (leave blank if not using key auth)
   # ssh_key: "~/.ssh/lab-key"                    # path to SSH private key (optional, required if using ssh_pub_key)
+
+# VM definitions — customize this list to add, remove, or modify VMs.
+# Use `overtime setup` to pre-populate from a scenario template, or define your own.
+# Each VM needs: name, os (windows/linux), role, ip_offset. Optional: cpu, memory, disk.
+vms:
+  - name: ad-1a
+    os: windows
+    role: ad
+    cpu: 2
+    disk: 30
+    ip_offset: 10
+  - name: ad-2a
+    os: windows
+    role: ad
+    cpu: 2
+    disk: 30
+    ip_offset: 11
+  - name: wutil-1a
+    os: windows
+    role: wutil
+    cpu: 2
+    disk: 30
+    ip_offset: 12
+  - name: gen-1a
+    os: windows
+    role: general
+    cpu: 2
+    disk: 30
+    ip_offset: 13
+  - name: gen-1b
+    os: windows
+    role: general
+    cpu: 2
+    disk: 30
+    ip_offset: 14
 
 # Optional: linux utility server settings
 jumphost:

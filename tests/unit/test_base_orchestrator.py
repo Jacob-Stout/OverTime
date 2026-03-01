@@ -1,4 +1,4 @@
-"""Tests for BaseOrchestrator shared logic (subprocess, HCL parsing, workspace)."""
+"""Tests for BaseOrchestrator shared logic (subprocess, workspace)."""
 
 import json
 from pathlib import Path
@@ -33,27 +33,6 @@ class _StubOrchestrator(BaseOrchestrator):
     ) -> None:
         pass  # pragma: no cover
 
-    def get_vm_definitions(
-        self, config: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
-        pass  # pragma: no cover
-
-
-SAMPLE_HCL = """\
-locals {
-  vm_definitions = {
-    "ad-lab-m" = [
-      { name_suffix = "ad-1a", role = "ad", os_type = "windows" },
-      { name_suffix = "ad-2a", role = "ad", os_type = "windows" },
-    ]
-
-    "jumphost" = [
-      { name_suffix = "lutil-1a", role = "lutil", os_type = "linux" },
-    ]
-  }
-}
-"""
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -62,8 +41,8 @@ locals {
 
 @pytest.fixture()
 def orchestrator(tmp_path) -> _StubOrchestrator:
-    """Stub orchestrator pointed at a temp directory with sample HCL."""
-    (tmp_path / "main.tf").write_text(SAMPLE_HCL)
+    """Stub orchestrator pointed at a temp directory."""
+    (tmp_path / "main.tf").write_text("")
     return _StubOrchestrator(terraform_dir=tmp_path)
 
 
@@ -160,45 +139,6 @@ class TestVarArgs:
 
 
 # ---------------------------------------------------------------------------
-# TestLoadVmDefinitions — HCL parsing
-# ---------------------------------------------------------------------------
-
-
-class TestLoadVmDefinitions:
-    """_load_vm_definitions() HCL parsing and error cases."""
-
-    def test_parses_known_scenario(self, orchestrator):
-        """Correctly parses vm_definitions for a known scenario."""
-        vms = orchestrator._load_vm_definitions("ad-lab-m")
-        assert len(vms) == 2
-        assert {vm["name_suffix"] for vm in vms} == {"ad-1a", "ad-2a"}
-
-    def test_parses_jumphost_scenario(self, orchestrator):
-        """Correctly parses vm_definitions for a single-VM scenario."""
-        vms = orchestrator._load_vm_definitions("jumphost")
-        assert len(vms) == 1
-        assert vms[0]["name_suffix"] == "lutil-1a"
-
-    def test_missing_scenario_raises(self, orchestrator):
-        """Requesting a scenario not in the HCL raises TerraformError."""
-        with pytest.raises(TerraformError, match="No VM definitions"):
-            orchestrator._load_vm_definitions("nonexistent")
-
-    def test_missing_main_tf_raises(self, tmp_path):
-        """Missing main.tf raises TerraformError."""
-        orch = _StubOrchestrator(terraform_dir=tmp_path / "empty")
-        with pytest.raises(TerraformError, match="main.tf not found"):
-            orch._load_vm_definitions("ad-lab-m")
-
-    def test_empty_vm_definitions_raises(self, tmp_path):
-        """main.tf with no vm_definitions local raises TerraformError."""
-        (tmp_path / "main.tf").write_text('locals { foo = "bar" }')
-        orch = _StubOrchestrator(terraform_dir=tmp_path)
-        with pytest.raises(TerraformError, match="vm_definitions not found"):
-            orch._load_vm_definitions("ad-lab-m")
-
-
-# ---------------------------------------------------------------------------
 # TestInit — terraform init
 # ---------------------------------------------------------------------------
 
@@ -237,7 +177,7 @@ class TestReadOutputs:
 
 
 # ---------------------------------------------------------------------------
-# TestEnsureWorkspace — workspace select-or-create
+# TestEnsureWorkspace — workspace select-or-create (no scenario param)
 # ---------------------------------------------------------------------------
 
 
@@ -248,10 +188,10 @@ class TestEnsureWorkspace:
         """When workspace select succeeds, no new is issued."""
         with patch.object(orchestrator, "_run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
-            orchestrator.ensure_workspace("lab", "ad-lab-m")
+            orchestrator.ensure_workspace("lab")
 
         mock_run.assert_called_once_with(
-            ["workspace", "select", "env-lab-ad-lab-m"],
+            ["workspace", "select", "env-lab"],
             check=False, capture=True,
         )
 
@@ -262,11 +202,11 @@ class TestEnsureWorkspace:
                 MagicMock(returncode=1),  # select fails
                 MagicMock(returncode=0),  # new succeeds
             ]
-            orchestrator.ensure_workspace("lab", "k8s-dev")
+            orchestrator.ensure_workspace("lab")
 
         assert mock_run.call_count == 2
         mock_run.assert_any_call(
-            ["workspace", "select", "env-lab-k8s-dev"],
+            ["workspace", "select", "env-lab"],
             check=False, capture=True,
         )
-        mock_run.assert_any_call(["workspace", "new", "env-lab-k8s-dev"])
+        mock_run.assert_any_call(["workspace", "new", "env-lab"])

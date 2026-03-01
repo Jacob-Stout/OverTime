@@ -3,11 +3,10 @@
 import json
 import logging
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any
 
 from .base import BaseOrchestrator
 from .state import TerraformOutputs
-from ..utils.exceptions import TerraformError
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +25,7 @@ class AzureNetworkOrchestrator(BaseOrchestrator):
         super().__init__(terraform_dir)
 
     # ------------------------------------------------------------------
-    # Workspace — different naming convention than per-scenario
+    # Workspace — different naming convention than per-environment
     # ------------------------------------------------------------------
 
     def ensure_network_workspace(self, prefix: str) -> None:
@@ -111,11 +110,3 @@ class AzureNetworkOrchestrator(BaseOrchestrator):
             args.append("-auto-approve")
         self._run(args)
 
-    def get_vm_definitions(
-        self, config: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
-        """Network module has no VMs."""
-        raise TerraformError(
-            "AzureNetworkOrchestrator does not manage VMs",
-            details="Use AzureOrchestrator for VM operations.",
-        )

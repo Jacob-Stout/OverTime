@@ -102,11 +102,13 @@ overtime create my-lab.yml               # provision VMs with Terraform
 overtime configure my-lab.yml            # configure VMs with Ansible (via SSH on linux utility VM)
 overtime destroy my-lab.yml              # tear down VMs
 
-# Azure only: tear down shared network after all scenarios destroyed
+# Azure only: tear down shared network after all VMs destroyed
 overtime network destroy my-lab.yml
 ```
 
 ## Provisioning Spec Format
+
+You define your VMs directly in the spec. Use `overtime setup` to generate a spec from a scenario template, or write one from scratch:
 
 ```yaml
 provider: proxmox  # or azure
@@ -122,13 +124,26 @@ proxmox:
 
 environment:
   environment_name_prefix: "lab"
-  scenario: "ad-lab-m"             # ad-lab-xs | ad-lab-s | ad-lab-m | k8s-dev | jumphost
   environment_fqdn: "lab.local"
 
 ansible:
   ansible_user: "ot-bootstrap"
   ansible_password: "${secret:ansible_password}"
   ssh_pub_key: "ssh-ed25519 AAAA..."
+
+vms:
+  - name: dc-1
+    os: windows
+    role: ad
+    cpu: 2
+    disk: 40
+    ip_offset: 10
+  - name: jumpbox
+    os: linux
+    role: lutil
+    cpu: 2
+    disk: 32
+    ip_offset: 15
 
 configure:                          # optional: playbook sequence for `overtime configure`
   playbooks:
@@ -138,9 +153,11 @@ configure:                          # optional: playbook sequence for `overtime 
 
 See [example-proxmox.yml](configs/environments/example-proxmox.yml) and [example-azure.yml](configs/environments/example-azure.yml) for complete references with all fields and comments.
 
-## Scenarios
+## Scenario Templates
 
-| Scenario | VMs | Description |
+`overtime setup` can pre-populate your spec from built-in scenario templates. List them with `overtime scenarios`:
+
+| Template | VMs | Description |
 |---|---|---|
 | `ad-lab-xs` | 3 Windows | 1 AD controller, 1 util, 1 general |
 | `ad-lab-s` | 4 Windows | 1 AD controller, 1 util, 2 general |
@@ -148,13 +165,13 @@ See [example-proxmox.yml](configs/environments/example-proxmox.yml) and [example
 | `k8s-dev` | 5 Linux | 3 K8s control-plane, 2 workers |
 | `jumphost` | 1 Linux | Shared linux utility server / jump host |
 
-List available scenarios with `overtime scenarios` or `overtime scenarios --provider azure`.
+Templates are starting points — once written to your spec, you can add, remove, or modify VMs freely.
 
 ## Two-Phase Workflow
 
 OverTime separates infrastructure provisioning from configuration:
 
-0. **(Azure only) `overtime network create`** creates the shared Resource Group and Virtual Network. Run once per environment before any scenario.
+0. **(Azure only) `overtime network create`** creates the shared Resource Group and Virtual Network. Run once per environment.
 1. **`overtime create`** runs Terraform to provision VMs. No SSH, no Ansible.
 2. **`overtime configure`** SSHes to the linux utility server / jump host, bootstraps Ansible, uploads playbooks and inventory, then executes the playbook sequence defined in your spec.
 

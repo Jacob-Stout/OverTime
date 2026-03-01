@@ -48,17 +48,22 @@ proxmox:
   vm_gateway: 192.168.0.1
 environment:
   environment_name_prefix: test
-  scenario: jumphost
   environment_fqdn: test.local
+  workspace: test-lab
 ansible:
   ansible_user: admin
   ansible_password: password
   ssh_pub_key: ssh-ed25519 AAAA... user@host
+vms:
+  - name: lutil-1a
+    os: linux
+    role: lutil
+    ip_offset: 15
 """)
 
     spec = load_provisioning_spec(config_file)
     assert spec.provider == 'proxmox'
-    assert spec.environment.scenario == 'jumphost'
+    assert spec.vms[0].name == 'lutil-1a'
 
 
 def test_invalid_api_url_rejected(tmp_path):
@@ -79,12 +84,17 @@ proxmox:
   vm_gateway: 192.168.0.1
 environment:
   environment_name_prefix: test
-  scenario: jumphost
   environment_fqdn: test.local
+  workspace: test-lab
 ansible:
   ansible_user: admin
   ansible_password: password
   ssh_pub_key: ssh-ed25519 AAAA... user@host
+vms:
+  - name: lutil-1a
+    os: linux
+    role: lutil
+    ip_offset: 15
 """)
 
     with pytest.raises(ConfigurationError, match="must use HTTPS"):
@@ -109,12 +119,17 @@ proxmox:
   vm_gateway: 192.168.0.1
 environment:
   environment_name_prefix: test
-  scenario: jumphost
   environment_fqdn: test.local
+  workspace: test-lab
 ansible:
   ansible_user: admin
   ansible_password: password
   ssh_pub_key: ssh-ed25519 AAAA... user@host
+vms:
+  - name: lutil-1a
+    os: linux
+    role: lutil
+    ip_offset: 15
 """)
 
     spec = load_provisioning_spec(config_file)
@@ -140,12 +155,17 @@ proxmox:
   vm_gateway: 999.999.999.999
 environment:
   environment_name_prefix: test
-  scenario: jumphost
   environment_fqdn: test.local
+  workspace: test-lab
 ansible:
   ansible_user: admin
   ansible_password: password
   ssh_pub_key: ssh-ed25519 AAAA... user@host
+vms:
+  - name: lutil-1a
+    os: linux
+    role: lutil
+    ip_offset: 15
 """)
 
     with pytest.raises(ConfigurationError, match="Invalid IP"):

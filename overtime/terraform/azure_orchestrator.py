@@ -35,6 +35,18 @@ class AzureOrchestrator(BaseOrchestrator):
         azure_cfg = config["azure"]
         env_cfg   = config["environment"]
 
+        # Convert VM list to the format Terraform expects
+        vm_list = [
+            {
+                "name_suffix": vm["name"],
+                "role":        vm["role"],
+                "os_type":     vm["os"],
+                "ip_offset":   vm["ip_offset"],
+                "disk_gb":     vm.get("disk", 30),
+            }
+            for vm in config.get("vms", [])
+        ]
+
         tfvars = {
             "subscription_id":         azure_cfg["subscription_id"],
             "resource_group_name":     azure_cfg["resource_group"],
@@ -42,11 +54,12 @@ class AzureOrchestrator(BaseOrchestrator):
             "vnet_cidr":               azure_cfg["vnet_cidr"],
             "subnet_cidr":             azure_cfg["subnet_cidr"],
             "environment_name_prefix": env_cfg["environment_name_prefix"],
-            "scenario":                env_cfg["scenario"],
+            "workspace":               env_cfg["workspace"],
             "admin_username":          azure_cfg["admin_username"],
             "ssh_pub_key":             config["ansible"]["ssh_pub_key"],
             "default_vm_size":         azure_cfg["default_vm_size"],
             "allowed_source_prefix":   azure_cfg["allowed_source_prefix"],
+            "vm_list":                 vm_list,
         }
 
         tfvars_path = self.terraform_dir / "terraform.tfvars.json"
@@ -75,7 +88,7 @@ class AzureOrchestrator(BaseOrchestrator):
         """Generate tfvars, set env, select workspace, run plan."""
         self._set_env(config)
         self._write_tfvars(config)
-        self.ensure_workspace(config["environment"]["environment_name_prefix"], config["environment"]["scenario"])
+        self.ensure_workspace(config["environment"]["workspace"])
         self._run(["plan", "-input=false"] + self._var_args())
 
     def apply(self, config: Dict[str, Any], *, auto_approve: bool = False) -> TerraformOutputs:
@@ -85,9 +98,9 @@ class AzureOrchestrator(BaseOrchestrator):
         Windows VM via ``az vm run-command invoke``.
         """
         self._set_env(config)
-        vms = self._load_vm_definitions(config["environment"]["scenario"])
+        vms = config.get("vms", [])
         self._write_tfvars(config)
-        self.ensure_workspace(config["environment"]["environment_name_prefix"], config["environment"]["scenario"])
+        self.ensure_workspace(config["environment"]["workspace"])
 
         args = ["apply", "-input=false"] + self._var_args()
         if auto_approve:
@@ -97,7 +110,7 @@ class AzureOrchestrator(BaseOrchestrator):
         outputs = self.read_outputs()
 
         # Disable Windows Firewall on all Windows VMs so Ansible/WinRM can connect.
-        windows_vms = [vm for vm in vms if vm["os_type"] == "windows"]
+        windows_vms = [vm for vm in vms if vm["os"] == "windows"]
         if windows_vms:
             rg = config["azure"]["resource_group"]
             prefix = config["environment"]["environment_name_prefix"]
@@ -109,7 +122,7 @@ class AzureOrchestrator(BaseOrchestrator):
         """Write tfvars, select workspace, and run destroy."""
         self._set_env(config)
         self._write_tfvars(config)
-        self.ensure_workspace(config["environment"]["environment_name_prefix"], config["environment"]["scenario"])
+        self.ensure_workspace(config["environment"]["workspace"])
 
         args = ["destroy", "-input=false"] + self._var_args()
         if auto_approve:
@@ -131,7 +144,7 @@ class AzureOrchestrator(BaseOrchestrator):
         script = "Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False"
 
         for vm in windows_vms:
-            vm_name = f"{prefix}-{vm['name_suffix']}"
+            vm_name = f"{prefix}-{vm['name']}"
             logger.info(f"Disabling Windows Firewall on {vm_name} …")
 
             result = subprocess.run(
@@ -153,11 +166,3 @@ class AzureOrchestrator(BaseOrchestrator):
                     f"Failed to disable firewall on {vm_name} (exit {result.returncode}): "
                     f"{result.stderr.strip()}"
                 )
-
-    # ------------------------------------------------------------------
-    # VM definition helper (used by configure command)
-    # ------------------------------------------------------------------
-
-    def get_vm_definitions(self, config: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Load VM definitions for the environment in config."""
-        return self._load_vm_definitions(config["environment"]["scenario"])

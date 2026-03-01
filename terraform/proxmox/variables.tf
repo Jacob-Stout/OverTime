@@ -50,15 +50,17 @@ variable "linux_template_id" {
   type        = number
 }
 
-variable "scenario" {
-  description = "Environment scenario (e.g. ad-lab-m, k8s-dev, jumphost).  Must match a key in vm_definitions."
-  type        = string
-  default     = "ad-lab-xs"
-
-  validation {
-    condition     = contains(["ad-lab-xs", "ad-lab-s", "ad-lab-m", "k8s-dev", "jumphost"], var.scenario)
-    error_message = "scenario must be one of: ad-lab-xs, ad-lab-s, ad-lab-m, k8s-dev, jumphost"
-  }
+variable "vm_list" {
+  description = "List of VM definitions to provision. Each object specifies a single VM."
+  type = list(object({
+    name_suffix = string
+    role        = string
+    cpu         = number
+    memory      = optional(number)
+    disk_size   = string
+    os_type     = string
+    ip_offset   = number
+  }))
 }
 
 variable "environment_name_prefix" {
